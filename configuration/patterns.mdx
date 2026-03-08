@@ -1,0 +1,586 @@
+---
+title: Patterns
+description: Reusable configuration templates for zones
+---
+
+# Patterns
+
+Patterns provide reusable configuration templates that can be shared across multiple zones. They avoid duplicating common settings and make configuration management easier.
+
+## Pattern Basics
+
+A pattern is defined using the `pattern:` clause and can contain any zone option except the zone name itself.
+
+### Basic Pattern Definition
+
+```conf
+pattern:
+    name: "secondary-zones"
+    allow-notify: 192.0.2.1 NOKEY
+    request-xfr: 192.0.2.1 NOKEY
+    zonefile: "%s.zone"
+
+zone:
+    name: example.com
+    include-pattern: "secondary-zones"
+
+zone:
+    name: example.net
+    include-pattern: "secondary-zones"
+```
+
+<ParamField path="name" type="string" required>
+The name of the pattern. This is a case-sensitive string used to reference the pattern.
+
+```conf
+pattern:
+    name: "my-pattern"
+```
+
+<Note>
+Pattern names starting with `_implicit_` are reserved for internal use by NSD.
+</Note>
+</ParamField>
+
+## Pattern Inheritance
+
+<ParamField path="include-pattern" type="pattern-name">
+Include options from another pattern. The referenced pattern must be defined above this one.
+
+```conf
+pattern:
+    name: "base"
+    zonefile: "zones/%s.zone"
+    max-refresh-time: 86400
+
+pattern:
+    name: "secondary"
+    include-pattern: "base"
+    allow-notify: 192.0.2.1 NOKEY
+    request-xfr: 192.0.2.1 NOKEY
+
+zone:
+    name: example.com
+    include-pattern: "secondary"
+```
+
+This creates layered configurations where specific patterns build upon base patterns.
+</ParamField>
+
+## Zone File Configuration
+
+<ParamField path="zonefile" type="filename">
+The zonefile path for zones using this pattern. Supports substitution variables:
+
+- `%s` - Full zone name
+- `%1` - First character of zone name
+- `%2` - Second character of zone name
+- `%3` - Third character of zone name
+- `%z` - Top-level domain label
+- `%y` - Next label under TLD
+- `%x` - Next-next label under TLD
+
+```conf
+pattern:
+    name: "organized"
+    # Creates: z/o/zones/example.com.zone
+    zonefile: "%1/%2/zones/%s.zone"
+
+pattern:
+    name: "by-tld"
+    # Creates: com/example.com.zone
+    zonefile: "%z/%s.zone"
+```
+
+Directories are created automatically as needed. The `/` character is escaped as `\047` within `%s`.
+</ParamField>
+
+## Primary Zone Patterns
+
+Patterns for primary zones typically include notify and provide-xfr settings.
+
+### Example Primary Pattern
+
+```conf
+pattern:
+    name: "primary"
+    zonefile: "primary/%s.zone"
+    
+    # Notify secondaries
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2 transfer-key
+    notify-retry: 5
+    
+    # Provide zone transfers
+    provide-xfr: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.2 transfer-key
+    provide-xfr: 192.0.2.0/24 NOKEY
+    
+    # Enable IXFR
+    store-ixfr: yes
+    ixfr-size: 10485760
+    ixfr-number: 10
+```
+
+### notify
+
+<ParamField path="notify" type="<ip-address> <key-name | NOKEY>">
+Send NOTIFY to the specified addresses when zones using this pattern are updated.
+
+```conf
+pattern:
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2@5353 mykey
+```
+</ParamField>
+
+<ParamField path="notify-retry" type="number" default="5">
+Number of times to retry sending NOTIFY messages.
+</ParamField>
+
+<ParamField path="provide-xfr" type="<ip-spec> <key-name | NOKEY | BLOCKED> [tls-auth-name]">
+Allow zone transfers to the specified addresses.
+
+```conf
+pattern:
+    provide-xfr: 192.0.2.0/24 NOKEY
+    provide-xfr: 192.0.2.5 mykey my-tls-auth
+    provide-xfr: 192.0.2.100 BLOCKED
+```
+</ParamField>
+
+## Secondary Zone Patterns
+
+Patterns for secondary zones include allow-notify and request-xfr settings.
+
+### Example Secondary Pattern
+
+```conf
+pattern:
+    name: "secondary"
+    zonefile: "secondary/%s.zone"
+    
+    # Accept notifies from primaries
+    allow-notify: 192.0.2.10 NOKEY
+    allow-notify: 192.0.2.11 transfer-key
+    
+    # Request transfers from primaries
+    request-xfr: 192.0.2.10 NOKEY
+    request-xfr: AXFR 192.0.2.11 transfer-key
+    
+    # Timer limits
+    max-refresh-time: 86400
+    min-refresh-time: 3600
+    max-retry-time: 7200
+    min-retry-time: 600
+    min-expire-time: refresh+retry+1
+    
+    # Fallback behavior
+    allow-axfr-fallback: yes
+```
+
+### allow-notify
+
+<ParamField path="allow-notify" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Accept NOTIFY messages from the specified addresses.
+
+```conf
+pattern:
+    allow-notify: 192.0.2.10 NOKEY
+    allow-notify: 192.0.2.0/24 notify-key
+```
+</ParamField>
+
+### request-xfr
+
+<ParamField path="request-xfr" type="[AXFR|UDP] <ip-address> <key-name | NOKEY> [tls-auth-name]">
+Request zone transfers from the specified addresses.
+
+```conf
+pattern:
+    # Standard IXFR/AXFR
+    request-xfr: 192.0.2.10 NOKEY
+    
+    # Force AXFR only
+    request-xfr: AXFR 192.0.2.11 NOKEY
+    
+    # IXFR over UDP
+    request-xfr: UDP 192.0.2.12 mykey
+    
+    # XFR-over-TLS
+    request-xfr: 192.0.2.13@853 mykey my-tls-auth
+```
+</ParamField>
+
+<ParamField path="allow-axfr-fallback" type="yes or no" default="yes">
+Allow fallback to AXFR if primary doesn't support IXFR.
+</ParamField>
+
+### Timer Configuration
+
+<ParamField path="max-refresh-time" type="seconds" default="2419200">
+Maximum refresh time (4 weeks default).
+</ParamField>
+
+<ParamField path="min-refresh-time" type="seconds" default="0">
+Minimum refresh time.
+</ParamField>
+
+<ParamField path="max-retry-time" type="seconds" default="1209600">
+Maximum retry time (2 weeks default).
+</ParamField>
+
+<ParamField path="min-retry-time" type="seconds" default="0">
+Minimum retry time.
+</ParamField>
+
+<ParamField path="min-expire-time" type="seconds or refresh+retry+1" default="0">
+Minimum expire time. Can be numeric or "refresh+retry+1".
+
+```conf
+pattern:
+    min-expire-time: refresh+retry+1
+```
+</ParamField>
+
+<ParamField path="multi-primary-check" type="yes or no" default="no">
+Check all primaries and use highest zone version. Useful when primaries have different versions.
+
+```conf
+pattern:
+    request-xfr: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.11 NOKEY
+    multi-primary-check: yes
+```
+</ParamField>
+
+## IXFR Configuration
+
+<ParamField path="store-ixfr" type="yes or no" default="no">
+Store IXFR data to provide incremental transfers.
+
+```conf
+pattern:
+    store-ixfr: yes
+    ixfr-size: 10485760
+    ixfr-number: 10
+```
+</ParamField>
+
+<ParamField path="ixfr-size" type="number" default="1048576">
+Maximum storage in bytes for IXFR versions. 0 means unlimited.
+</ParamField>
+
+<ParamField path="ixfr-number" type="number" default="5">
+Maximum number of IXFR versions to store.
+</ParamField>
+
+<ParamField path="create-ixfr" type="yes or no" default="no">
+Create IXFR data when zonefile is read. Requires `store-ixfr: yes`.
+
+```conf
+pattern:
+    store-ixfr: yes
+    create-ixfr: yes
+```
+</ParamField>
+
+## Access Control
+
+<ParamField path="allow-query" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Access control list for queries to zones using this pattern.
+
+```conf
+pattern:
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 192.0.2.0/24 NOKEY
+    allow-query: 192.0.2.100 BLOCKED
+```
+</ParamField>
+
+<ParamField path="outgoing-interface" type="<ip-address>">
+Local address for outgoing AXFR/IXFR requests or NOTIFY messages.
+
+```conf
+pattern:
+    outgoing-interface: 192.0.2.5
+    outgoing-interface: 2001:db8::5@5353
+```
+</ParamField>
+
+<ParamField path="size-limit-xfr" type="number" default="0">
+Limit zone transfer size in bytes. 0 means unlimited.
+
+```conf
+pattern:
+    size-limit-xfr: 104857600  # 100MB
+```
+</ParamField>
+
+## Statistics and Rate Limiting
+
+<ParamField path="zonestats" type="name" default="">
+Collect statistics for zones using this pattern.
+
+```conf
+pattern:
+    zonestats: "%s"  # Use zone name
+```
+</ParamField>
+
+<ParamField path="rrl-whitelist" type="<rrltype>">
+Whitelist query types for higher rate limits.
+
+```conf
+pattern:
+    rrl-whitelist: dnskey
+    rrl-whitelist: positive
+```
+
+Available types: nxdomain, error, referral, any, rrsig, wildcard, nodata, dnskey, positive, all
+</ParamField>
+
+## Zone Verification
+
+<ParamField path="verify-zone" type="yes or no" default="inherit">
+Enable zone verification before publishing.
+
+```conf
+pattern:
+    verify-zone: yes
+    verifier: ldns-verify-zone
+    verifier-feed-zone: yes
+    verifier-timeout: 30
+```
+</ParamField>
+
+<ParamField path="verifier" type="command">
+Command to execute for zone verification.
+
+```conf
+pattern:
+    verifier: validns -
+    verifier: ldns-verify-zone
+```
+</ParamField>
+
+<ParamField path="verifier-feed-zone" type="yes or no" default="yes">
+Feed zone to verifier over stdin.
+</ParamField>
+
+<ParamField path="verifier-timeout" type="seconds" default="0">
+Seconds before verifier is terminated. 0 means no timeout.
+</ParamField>
+
+## Catalog Zones
+
+<ParamField path="catalog" type="consumer or producer">
+Mark zones using this pattern as catalog zones.
+
+```conf
+pattern:
+    name: "catalog-consumer"
+    catalog: consumer
+    catalog-member-pattern: "member-pattern"
+```
+</ParamField>
+
+<ParamField path="catalog-member-pattern" type="pattern-name">
+Default pattern for catalog consumer member zones.
+</ParamField>
+
+<ParamField path="catalog-producer-zone" type="zone-name">
+Associate zones with a catalog producer zone.
+
+```conf
+pattern:
+    name: "catalog-member"
+    catalog-producer-zone: "catalog.example.com"
+```
+</ParamField>
+
+## Pattern Examples
+
+### Comprehensive Secondary Pattern
+
+```conf
+pattern:
+    name: "production-secondary"
+    
+    # File organization
+    zonefile: "secondary/%z/%s.zone"
+    
+    # Primary servers
+    allow-notify: 192.0.2.10 transfer-key
+    allow-notify: 192.0.2.11 transfer-key
+    request-xfr: 192.0.2.10 transfer-key
+    request-xfr: 192.0.2.11 transfer-key
+    multi-primary-check: yes
+    
+    # Timers (tighter than SOA defaults)
+    max-refresh-time: 86400   # 1 day
+    min-refresh-time: 3600    # 1 hour
+    max-retry-time: 7200      # 2 hours
+    min-retry-time: 600       # 10 minutes
+    min-expire-time: refresh+retry+1
+    
+    # IXFR support
+    store-ixfr: yes
+    ixfr-size: 10485760
+    ixfr-number: 10
+    
+    # Stats and limits
+    zonestats: "%s"
+    size-limit-xfr: 104857600  # 100MB
+```
+
+### DNSSEC Primary Pattern
+
+```conf
+pattern:
+    name: "dnssec-primary"
+    
+    zonefile: "primary/%s.zone"
+    
+    # Notify secondaries
+    notify: 192.0.2.1 transfer-key
+    notify: 192.0.2.2 transfer-key
+    notify-retry: 3
+    
+    # Provide transfers
+    provide-xfr: 192.0.2.1 transfer-key
+    provide-xfr: 192.0.2.2 transfer-key
+    
+    # IXFR for efficiency
+    store-ixfr: yes
+    create-ixfr: yes
+    ixfr-size: 20971520  # 20MB
+    ixfr-number: 15
+    
+    # Verification
+    verify-zone: yes
+    verifier: ldns-verify-zone
+    verifier-timeout: 60
+    
+    # Stats
+    zonestats: "dnssec-zones"
+```
+
+### Layered Patterns
+
+```conf
+# Base pattern with common settings
+pattern:
+    name: "base"
+    max-refresh-time: 86400
+    max-retry-time: 3600
+    zonefile: "%z/%s.zone"
+    zonestats: "%s"
+
+# Secondary pattern builds on base
+pattern:
+    name: "secondary"
+    include-pattern: "base"
+    allow-notify: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.10 NOKEY
+
+# Secure secondary adds TLS
+pattern:
+    name: "secure-secondary"
+    include-pattern: "base"
+    allow-notify: 192.0.2.20 mykey
+    request-xfr: 192.0.2.20@853 mykey my-tls-auth
+    allow-axfr-fallback: no
+
+# Use the patterns
+zone:
+    name: public.example.com
+    include-pattern: "secondary"
+
+zone:
+    name: internal.example.com
+    include-pattern: "secure-secondary"
+```
+
+### High-Availability Pattern
+
+```conf
+pattern:
+    name: "ha-secondary"
+    
+    # Multiple primaries for redundancy
+    allow-notify: 192.0.2.10 NOKEY
+    allow-notify: 192.0.2.11 NOKEY
+    allow-notify: 192.0.2.12 NOKEY
+    
+    request-xfr: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.11 NOKEY  
+    request-xfr: 192.0.2.12 NOKEY
+    
+    # Use highest version from any primary
+    multi-primary-check: yes
+    
+    # Aggressive refresh
+    max-refresh-time: 3600
+    min-refresh-time: 600
+    max-retry-time: 1800
+    
+    # Store IXFR for efficiency
+    store-ixfr: yes
+    ixfr-size: 10485760
+    
+    zonefile: "ha/%s.zone"
+```
+
+## Best Practices
+
+<AccordionGroup>
+<Accordion title="Use hierarchical patterns">
+Create base patterns with common settings, then specialized patterns that build on them:
+
+```conf
+pattern:
+    name: "base"
+    zonefile: "%z/%s.zone"
+    max-refresh-time: 86400
+
+pattern:
+    name: "secondary"
+    include-pattern: "base"
+    allow-notify: 192.0.2.1 NOKEY
+    request-xfr: 192.0.2.1 NOKEY
+```
+</Accordion>
+
+<Accordion title="Group similar zones">
+Use patterns to group zones by type, security level, or function:
+
+```conf
+pattern:
+    name: "public-zones"      # Internet-facing zones
+pattern:
+    name: "internal-zones"    # Internal-only zones
+pattern:
+    name: "dnssec-zones"      # DNSSEC-signed zones
+```
+</Accordion>
+
+<Accordion title="Use substitution variables">
+Leverage zonefile variables for organized storage:
+
+```conf
+pattern:
+    # By TLD: com/example.com.zone, net/example.net.zone
+    zonefile: "%z/%s.zone"
+    
+    # By first letter: e/x/example.com.zone
+    zonefile: "%1/%2/%s.zone"
+```
+</Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [Zone Configuration](/configuration/zone-configuration)
+- [Access Control](/configuration/access-control)
+- [Server Options](/configuration/server-options)

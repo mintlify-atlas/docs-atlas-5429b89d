@@ -1,0 +1,275 @@
+---
+title: Network Interfaces
+description: Configure IP addresses, interface binding, and IPv4/IPv6 support in NSD
+---
+
+NSD binds to network interfaces to listen for DNS queries. By default, it binds to the system's default interface and serves both IPv4 and IPv6. This guide covers interface configuration for single and multi-homed systems.
+
+## Default Behavior
+
+Without specific configuration, NSD:
+- Binds to the default system interface
+- Listens on IPv4
+- Listens on IPv6 (if available)
+- Uses the operating system's routing tables for interface selection
+
+## Protocol Selection
+
+Restrict NSD to IPv4 or IPv6 only.
+
+### Command Line Options
+
+```bash
+# IPv4 only
+nsd -4
+
+# IPv6 only
+nsd -6
+```
+
+### Configuration File
+
+```text
+server:
+  # IPv4 only
+  ip4-only: yes
+```
+
+```text
+server:
+  # IPv6 only
+  ip6-only: yes
+```
+
+## Binding to Specific Interfaces
+
+Explicitly specify which IP addresses NSD should listen on.
+
+### Single Interface
+
+**Command line:**
+```bash
+nsd -a 192.0.2.53
+```
+
+**Configuration file:**
+```text
+server:
+  ip-address: 192.0.2.53
+```
+
+### Multiple Interfaces
+
+```text
+server:
+  ip-address: 192.0.2.53
+  ip-address: 198.51.100.53
+  ip-address: 2001:db8::53
+```
+
+## Why Specify Interfaces?
+
+Even if you want NSD to listen on all interfaces, explicitly configuring them provides two important benefits:
+
+### 1. Performance Optimization
+
+Binding to specific interfaces bypasses the OS routing table lookup:
+- Small but measurable performance gain
+- Reduces latency for high-volume servers
+- Eliminates potential routing table errors
+
+### 2. Symmetric Routing
+
+Ensures DNS responses return through the same interface queries arrived on:
+
+```text
+Query:    Client -> 192.0.2.53 -> NSD
+Response: NSD -> 192.0.2.53 -> Client
+```
+
+**Why this matters:**
+- Many DNS resolvers validate that response source addresses match query destinations
+- Incorrect routing can cause query failures
+- OS routing tables may select the wrong interface for responses
+
+<Tip>
+**Best practice for multi-homed systems:**  
+Even when serving DNS on all interfaces, explicitly list each IP address in the configuration. This prevents routing issues and improves reliability.
+</Tip>
+
+## Multi-Homed Configuration
+
+For servers with multiple network interfaces:
+
+```text
+server:
+  # External interface
+  ip-address: 203.0.113.53
+  
+  # Internal interface
+  ip-address: 10.0.1.53
+  
+  # IPv6 address
+  ip-address: 2001:db8:1::53
+  ip-address: 2001:db8:2::53
+```
+
+This configuration:
+- Serves DNS on four different addresses
+- Guarantees symmetric routing for each interface
+- Avoids cross-interface routing problems
+
+## Transparent Proxy Support
+
+Bind to non-local addresses for transparent proxy deployments.
+
+```text
+server:
+  ip-transparent: yes
+  ip-address: 192.0.2.1
+```
+
+**Requirements:**
+- Appropriate kernel support (Linux: `IP_TRANSPARENT` socket option)
+- Proper routing and firewall rules
+- Elevated privileges or capabilities
+
+<Warning>
+`ip-transparent` requires special network configuration and should only be used in advanced scenarios like anycast or transparent proxy setups.
+</Warning>
+
+## Port Configuration
+
+Change the default DNS port (53):
+
+```text
+server:
+  ip-address: 192.0.2.53@5353
+```
+
+Use cases:
+- Testing without root privileges
+- Non-standard DNS deployments
+- Running multiple DNS servers on the same host
+
+<Note>
+Standard DNS clients expect port 53. Only change the port for testing or specialized deployments.
+</Note>
+
+## Advanced Interface Options
+
+Combine interface binding with performance tuning options:
+
+```text
+server:
+  server-count: 2
+  
+  # Partition interfaces across server processes
+  ip-address: 192.0.2.1 servers=1
+  ip-address: 192.0.2.2 servers=2
+  
+  # Bind directly to network devices (Linux)
+  ip-address: 203.0.113.53 bindtodevice=yes
+  
+  # Use specific routing table (FreeBSD)
+  ip-address: 198.51.100.53 setfib=1
+```
+
+See [Performance Tuning](/administration/tuning) for detailed information on these advanced options.
+
+## Verification
+
+Confirm NSD is listening on the correct interfaces:
+
+```bash
+# Check listening sockets
+sudo netstat -tulnp | grep nsd
+
+# Or with ss
+sudo ss -tulnp | grep nsd
+```
+
+Expected output:
+```text
+udp   0.0.0.0:53     0.0.0.0:*     nsd
+tcp   0.0.0.0:53     0.0.0.0:*     nsd
+udp   [::]:53        [::]:*        nsd
+tcp   [::]:53        [::]:*        nsd
+```
+
+## Common Configurations
+
+### Single Public Interface
+
+```text
+server:
+  ip-address: 203.0.113.53
+  ip-address: 2001:db8::53
+```
+
+### Public and Private Networks
+
+```text
+server:
+  # Public
+  ip-address: 203.0.113.53
+  
+  # Private RFC 1918
+  ip-address: 10.0.1.53
+  ip-address: 192.168.1.53
+```
+
+### Localhost Only (Testing)
+
+```text
+server:
+  ip-address: 127.0.0.1
+  ip-address: ::1
+```
+
+### All Interfaces (IPv4 and IPv6)
+
+```text
+server:
+  ip-address: 0.0.0.0
+  ip-address: ::
+```
+
+<Tip>
+While `0.0.0.0` and `::` work, explicitly listing interfaces provides better performance and routing behavior on multi-homed systems.
+</Tip>
+
+## Troubleshooting
+
+### Address Already in Use
+
+**Error:**
+```text
+error: can't bind socket: Address already in use
+```
+
+**Solutions:**
+- Check for other DNS servers using port 53: `sudo lsof -i :53`
+- Verify no other NSD instances are running: `ps aux | grep nsd`
+- Ensure systemd-resolved isn't binding to port 53
+
+### Permission Denied
+
+**Error:**
+```text
+error: can't bind socket: Permission denied
+```
+
+**Solutions:**
+- Run as root or use capabilities: `sudo setcap CAP_NET_BIND_SERVICE=+ep /usr/sbin/nsd`
+- Use a non-privileged port (>1024) for testing
+- Check that the `username` option doesn't drop privileges before binding
+
+### Wrong Source Address
+
+If responses come from a different IP than expected:
+
+1. Explicitly configure `ip-address` for each interface
+2. Consider using `bindtodevice=yes` (Linux) or `setfib` (FreeBSD)
+3. Check routing tables: `ip route` or `route -n`
+4. Verify firewall rules aren't interfering

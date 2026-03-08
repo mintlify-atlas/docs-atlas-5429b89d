@@ -1,0 +1,273 @@
+---
+title: Zone File Format
+description: Syntax and structure of NSD zone files
+---
+
+NSD uses the standard DNS zone file format as defined in RFC 1035. Zone files contain DNS resource records that define the content of a DNS zone.
+
+## Zone File Structure
+
+A zone file consists of:
+- **Directives**: Control statements that begin with `$`
+- **Resource Records (RRs)**: DNS data entries
+- **Comments**: Lines beginning with `;` or inline after data
+
+### Basic Syntax
+
+Each resource record follows this format:
+
+```zone
+<name> [<ttl>] [<class>] <type> <rdata>
+```
+
+- **name**: The owner name (can use `@` for zone origin)
+- **ttl**: Time-to-live in seconds (optional if `$TTL` is set)
+- **class**: Record class, typically `IN` for Internet (optional, defaults to previous)
+- **type**: Record type (A, AAAA, MX, etc.)
+- **rdata**: Type-specific data
+
+## Directives
+
+### $ORIGIN
+
+Sets the origin (base domain) for relative domain names in the zone file.
+
+```zone
+$ORIGIN example.com.
+```
+
+After this directive, unqualified names are appended to `example.com.`
+
+**Example:**
+```zone
+$ORIGIN example.com.
+www    IN  A  192.0.2.1
+; Equivalent to: www.example.com. IN A 192.0.2.1
+```
+
+### $TTL
+
+Sets the default Time-To-Live for subsequent records that don't specify a TTL.
+
+```zone
+$TTL 86400  ; 24 hours in seconds
+```
+
+**Common TTL values:**
+- `300` - 5 minutes
+- `3600` - 1 hour (1H)
+- `86400` - 24 hours (1D)
+- `604800` - 7 days (7D)
+
+**Example:**
+```zone
+$TTL 3600
+example.com.  IN  A     192.0.2.1
+www           IN  A     192.0.2.2
+mail          IN  A     192.0.2.3
+; All records inherit 3600 second TTL
+```
+
+### $INCLUDE
+
+Includes another zone file at the current position.
+
+```zone
+$INCLUDE /path/to/included-file.zone
+$INCLUDE records.zone subdomain.example.com.
+```
+
+The optional second argument sets a temporary origin for the included file.
+
+## SOA Record
+
+Every zone **must** contain exactly one Start of Authority (SOA) record at the zone apex.
+
+```zone
+example.com.  IN  SOA  ns.example.com. admin.example.com. (
+    2020080302  ; Serial (version number)
+    7200        ; Refresh (2 hours)
+    3600        ; Retry (1 hour)
+    1209600     ; Expire (14 days)
+    3600        ; Negative caching TTL (1 hour)
+)
+```
+
+### SOA Fields
+
+1. **Primary nameserver**: Authoritative master for the zone
+2. **Contact email**: Administrator email (first `.` becomes `@`)
+   - `admin.example.com.` → `admin@example.com`
+   - Use backslash for dots in local part: `john\.doe.example.com.` → `john.doe@example.com`
+3. **Serial**: Zone version number (increment on changes)
+4. **Refresh**: How often secondaries check for updates
+5. **Retry**: How long secondaries wait after failed refresh
+6. **Expire**: When secondaries stop answering if primary is unreachable
+7. **Negative TTL**: How long to cache NXDOMAIN responses
+
+**Common SOA format:**
+```zone
+$ORIGIN example.com.
+$TTL 86400
+
+@  IN  SOA  ns.example.com. noc.dns.example.org. (
+    2020080302  ; Serial
+    7200        ; Refresh
+    3600        ; Retry
+    1209600     ; Expire
+    3600        ; Negative response caching TTL
+)
+```
+
+## NS Records
+
+Every zone **must** have at least one Name Server (NS) record.
+
+```zone
+example.com.  IN  NS  ns1.example.com.
+example.com.  IN  NS  ns2.example.com.
+```
+
+Shorthand using zone origin:
+```zone
+@  IN  NS  ns1.example.com.
+@  IN  NS  ns2.example.com.
+```
+
+## Domain Names
+
+### Fully Qualified Domain Names (FQDN)
+
+Domain names ending with a dot are absolute:
+```zone
+www.example.com.  IN  A  192.0.2.1
+```
+
+### Relative Domain Names
+
+Names without trailing dots are relative to `$ORIGIN`:
+```zone
+$ORIGIN example.com.
+www  IN  A  192.0.2.1
+; Becomes: www.example.com.
+```
+
+### Special Symbols
+
+- **`@`**: Represents the current `$ORIGIN`
+  ```zone
+  @  IN  A  192.0.2.1
+  ; Equivalent to: example.com. IN A 192.0.2.1
+  ```
+
+## Record Class
+
+NSD supports the `IN` (Internet) class. If omitted, the class is inherited from the previous record.
+
+```zone
+example.com.  IN  A     192.0.2.1
+www                A     192.0.2.2  ; Inherits IN class
+```
+
+## Comments
+
+Comments begin with semicolon `;` and continue to end of line:
+
+```zone
+; This is a full-line comment
+example.com.  IN  A  192.0.2.1  ; This is an inline comment
+```
+
+## Multi-line Records
+
+Parentheses allow records to span multiple lines (commonly used for SOA):
+
+```zone
+example.com.  IN  SOA  ns.example.com. admin.example.com. (
+    2020080302  ; Serial
+    7200        ; Refresh
+    3600        ; Retry
+    1209600     ; Expire  
+    3600 )      ; Negative TTL
+```
+
+## Complete Zone Example
+
+```zone
+$ORIGIN example.com.
+$TTL 86400 ; default time-to-live for this zone
+
+example.com.  IN  SOA  ns.example.com. noc.dns.example.org. (
+    2020080302  ; Serial
+    7200        ; Refresh
+    3600        ; Retry
+    1209600     ; Expire
+    3600        ; Negative response caching TTL
+)
+
+; The nameservers that are authoritative for this zone
+              NS  ns1.example.com.
+              NS  ns2.example.com.
+
+; A and AAAA records for IPv4 and IPv6 addresses
+example.com.  A      192.0.2.1
+              AAAA   2001:db8::3
+
+; CNAME redirects from www.example.com to example.com
+www           CNAME  example.com.
+
+; Mail exchanger
+mail          MX     10 example.com.
+```
+
+## Validation
+
+Always validate zone files before deploying them to production. Use `nsd-checkzone` to verify syntax and detect errors:
+
+```bash
+nsd-checkzone example.com /path/to/zone/file
+```
+
+See [Zone Validation](/reference/zone-validation) for complete validation details.
+
+## Common Mistakes
+
+<Warning>
+**Missing trailing dots**: Forgetting the trailing dot on FQDNs causes them to be treated as relative names.
+
+```zone
+; WRONG - missing trailing dot
+www  IN  CNAME  host.example.com
+; Becomes: www.example.com. IN CNAME host.example.com.example.com.
+
+; CORRECT - with trailing dot  
+www  IN  CNAME  host.example.com.
+```
+</Warning>
+
+<Warning>
+**Email address format**: SOA email addresses use `.` instead of `@`.
+
+```zone
+; WRONG
+@  IN  SOA  ns.example.com. admin@example.com. ( ... )
+
+; CORRECT
+@  IN  SOA  ns.example.com. admin.example.com. ( ... )
+```
+</Warning>
+
+<Note>
+NSD requires that zone files are well-formed according to DNS standards. The zone compiler will report errors for:
+- Missing SOA record
+- Missing NS records  
+- Malformed domain names
+- Invalid record data
+- Out-of-zone data
+</Note>
+
+## See Also
+
+- [Resource Records](/reference/resource-records) - All supported RR types
+- [Zone Validation](/reference/zone-validation) - Validation rules and nsd-checkzone usage
+- RFC 1035 - Domain Names - Implementation and Specification

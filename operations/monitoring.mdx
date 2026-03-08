@@ -1,0 +1,678 @@
+---
+title: Monitoring and Statistics
+description: Statistics, metrics, health checks, and performance monitoring
+---
+
+NSD provides comprehensive statistics for monitoring server health, performance, and zone status. This page covers statistics collection, metrics, and health monitoring.
+
+## Statistics Collection
+
+### Enabling Statistics
+
+Statistics support must be enabled at compile time:
+
+```bash
+./configure --enable-bind8-stats
+make
+make install
+```
+
+<Warning>
+If NSD was not compiled with `--enable-bind8-stats`, the `stats` command will return:
+```
+error no stats enabled at compile time
+```
+</Warning>
+
+### Collecting Statistics
+
+Get current statistics:
+
+```bash
+nsd-control stats
+```
+
+Output format (name=value pairs):
+```
+num.queries=12345
+server0.queries=3456
+server1.queries=3123
+time.boot=1234567890.123
+time.elapsed=123.456
+size.db.disk=12345678
+size.db.mem=23456789
+num.type.A=5000
+num.type.AAAA=3000
+num.type.MX=500
+...
+```
+
+Get statistics without resetting:
+
+```bash
+nsd-control stats_noreset
+```
+
+This allows continuous monitoring without affecting counters.
+
+### Periodic Statistics
+
+Dump statistics periodically:
+
+```bash
+nsd -s 3600
+```
+
+Or in `nsd.conf`:
+```yaml
+server:
+    statistics: 3600
+```
+
+This produces statistics dump every 3600 seconds (1 hour) to the log.
+
+Alternatively, send SIGUSR1 signal:
+```bash
+kill -USR1 $(cat /var/run/nsd.pid)
+```
+
+## Statistics Reference
+
+### Query Counters
+
+#### num.queries
+Total number of queries received (UDP + TCP + TLS).
+
+```
+num.queries=54321
+```
+
+#### serverX.queries
+Number of queries handled by server process X.
+
+```
+server0.queries=13580
+server1.queries=13581
+server2.queries=13580
+server3.queries=13580
+```
+
+The number of server processes is set with `server-count` in config.
+
+### Time Statistics
+
+#### time.boot
+Uptime in seconds since server started (with fractional seconds).
+
+```
+time.boot=86400.123
+```
+
+#### time.elapsed
+Time since last stats report in seconds (with fractional seconds).
+
+```
+time.elapsed=3600.456
+```
+
+Can be zero if stats are polled quickly after a reset.
+
+### Memory and Disk
+
+#### size.db.disk
+Size of `nsd.db` on disk in bytes.
+
+```
+size.db.disk=12345678
+```
+
+#### size.db.mem
+Size of DNS database in memory in bytes.
+
+```
+size.db.mem=23456789
+```
+
+#### size.xfrd.mem
+Memory used for zone transfers and notifies in xfrd process (excludes TSIG data), in bytes.
+
+```
+size.xfrd.mem=1234567
+```
+
+#### size.config.disk
+Size of zonelist file on disk (excludes `nsd.conf` size), in bytes.
+
+```
+size.config.disk=12345
+```
+
+#### size.config.mem
+Size of config data in memory, kept twice (in server and xfrd process), in bytes.
+
+```
+size.config.mem=234567
+```
+
+### Query Type Counters
+
+#### num.type.X
+Number of queries with this query type.
+
+```
+num.type.A=15000
+num.type.AAAA=8000
+num.type.MX=1500
+num.type.NS=800
+num.type.SOA=300
+num.type.TXT=1200
+```
+
+Common types:
+- `A` - IPv4 address
+- `AAAA` - IPv6 address
+- `NS` - Name server
+- `MX` - Mail exchange
+- `SOA` - Start of authority
+- `TXT` - Text record
+- `CNAME` - Canonical name
+- `PTR` - Pointer record
+
+### Opcode Counters
+
+#### num.opcode.X
+Number of queries with this opcode.
+
+```
+num.opcode.QUERY=50000
+num.opcode.NOTIFY=100
+```
+
+### Query Class Counters
+
+#### num.class.X
+Number of queries with this query class.
+
+```
+num.class.IN=49900
+num.class.CH=100
+```
+
+Most queries are class IN (Internet).
+
+### Response Code Counters
+
+#### num.rcode.X
+Number of answers that carried this return code.
+
+```
+num.rcode.NOERROR=45000
+num.rcode.NXDOMAIN=4000
+num.rcode.SERVFAIL=500
+num.rcode.REFUSED=100
+```
+
+Common codes:
+- `NOERROR` - Successful query
+- `NXDOMAIN` - Domain doesn't exist
+- `SERVFAIL` - Server failure
+- `REFUSED` - Query refused
+- `FORMERR` - Format error
+
+### Protocol Counters
+
+#### num.udp / num.udp6
+Number of queries over UDP IPv4 / IPv6.
+
+```
+num.udp=40000
+num.udp6=8000
+```
+
+#### num.tcp / num.tcp6
+Number of connections over TCP IPv4 / IPv6.
+
+```
+num.tcp=1500
+num.tcp6=300
+```
+
+#### num.tls / num.tls6
+Number of connections over TLS IPv4 / IPv6 (not part of TCP counters).
+
+```
+num.tls=200
+num.tls6=50
+```
+
+### EDNS Counters
+
+#### num.edns
+Number of queries with EDNS OPT.
+
+```
+num.edns=35000
+```
+
+#### num.ednserr
+Number of queries which failed EDNS parse.
+
+```
+num.ednserr=10
+```
+
+### Special Counters
+
+#### num.answer_wo_aa
+Number of answers with NOERROR rcode and without AA flag (includes referrals).
+
+```
+num.answer_wo_aa=5000
+```
+
+#### num.rxerr
+Number of queries for which receive failed.
+
+```
+num.rxerr=5
+```
+
+#### num.txerr
+Number of answers for which transmit failed.
+
+```
+num.txerr=3
+```
+
+#### num.raxfr
+Number of AXFR requests from clients (that got served with reply).
+
+```
+num.raxfr=10
+```
+
+#### num.rixfr
+Number of IXFR requests from clients (that got served with reply).
+
+```
+num.rixfr=50
+```
+
+#### num.truncated
+Number of answers with TC (truncated) flag set.
+
+```
+num.truncated=200
+```
+
+#### num.dropped
+Number of queries dropped because they failed sanity check.
+
+```
+num.dropped=15
+```
+
+### Zone Counters
+
+#### zone.primary / zone.master
+Number of primary zones served (zones with no `request-xfr` entries).
+
+```
+zone.primary=50
+zone.master=50
+```
+
+`zone.master` is output for backwards compatibility.
+
+#### zone.secondary / zone.slave
+Number of secondary zones served (zones with `request-xfr` entries).
+
+```
+zone.secondary=25
+zone.slave=25
+```
+
+`zone.slave` is output for backwards compatibility.
+
+## Parsing Statistics
+
+Statistics output is designed for easy parsing:
+
+### Extract Specific Metric
+
+```bash
+nsd-control stats | grep 'num.queries'
+```
+
+Output:
+```
+num.queries=12345
+```
+
+### Parse with awk
+
+```bash
+QUERIES=$(nsd-control stats | awk -F= '/^num.queries=/ {print $2}')
+echo "Total queries: $QUERIES"
+```
+
+### Monitor Changes
+
+```bash
+while true; do
+    nsd-control stats | grep 'num.queries'
+    sleep 60
+done
+```
+
+### Calculate Query Rate
+
+```bash
+#!/bin/bash
+STATS1=$(nsd-control stats | grep 'num.queries' | cut -d= -f2)
+sleep 60
+STATS2=$(nsd-control stats | grep 'num.queries' | cut -d= -f2)
+RATE=$(( ($STATS2 - $STATS1) / 60 ))
+echo "Query rate: $RATE queries/second"
+```
+
+## Health Checks
+
+### Process Status
+
+Check if NSD is running:
+
+```bash
+nsd-control status
+```
+
+Exit codes:
+- `0` - Running
+- `1` - Error
+- `3` - Not running
+
+Script example:
+```bash
+#!/bin/bash
+if nsd-control status > /dev/null 2>&1; then
+    echo "NSD is running"
+else
+    echo "NSD is NOT running"
+    exit 1
+fi
+```
+
+### Zone Status
+
+Check all zones:
+
+```bash
+nsd-control zonestatus
+```
+
+Check specific zone:
+```bash
+nsd-control zonestatus example.com
+```
+
+Script to check for expired zones:
+```bash
+#!/bin/bash
+EXPIRED=$(nsd-control zonestatus | grep 'state: expired' | wc -l)
+if [ $EXPIRED -gt 0 ]; then
+    echo "WARNING: $EXPIRED zones are expired"
+    exit 1
+fi
+```
+
+### Query Test
+
+Test DNS resolution:
+
+```bash
+dig @localhost example.com SOA +short
+```
+
+Healthcheck script:
+```bash
+#!/bin/bash
+RESPONSE=$(dig @localhost example.com SOA +short +time=2 +tries=1)
+if [ -z "$RESPONSE" ]; then
+    echo "ERROR: No response from NSD"
+    exit 1
+else
+    echo "OK: NSD responding"
+    exit 0
+fi
+```
+
+## Monitoring with Munin
+
+NSD includes a Munin plugin in the distribution:
+
+**Location:** `contrib/nsd_munin_`
+
+**GitHub:** https://github.com/NLnetLabs/nsd/blob/master/contrib/nsd_munin_
+
+The plugin uses `nsd-control stats` to graph:
+- Query rates
+- Query types
+- Response codes
+- Memory usage
+
+### Installation
+
+<Steps>
+1. Copy the plugin:
+   ```bash
+   cp contrib/nsd_munin_ /usr/share/munin/plugins/
+   chmod +x /usr/share/munin/plugins/nsd_munin_
+   ```
+
+2. Create symlinks:
+   ```bash
+   cd /etc/munin/plugins
+   ln -s /usr/share/munin/plugins/nsd_munin_ nsd_queries
+   ln -s /usr/share/munin/plugins/nsd_munin_ nsd_memory
+   ```
+
+3. Configure access:
+   ```bash
+   cat > /etc/munin/plugin-conf.d/nsd <<EOF
+   [nsd_*]
+   user nsd
+   EOF
+   ```
+
+4. Restart munin-node:
+   ```bash
+   systemctl restart munin-node
+   ```
+</Steps>
+
+## Monitoring with Prometheus
+
+Export NSD statistics to Prometheus format:
+
+### nsd_exporter
+
+Example Prometheus exporter script:
+
+```python
+#!/usr/bin/env python3
+import subprocess
+import time
+from prometheus_client import start_http_server, Gauge
+
+# Create Prometheus gauges
+queries_total = Gauge('nsd_queries_total', 'Total number of queries')
+queries_udp = Gauge('nsd_queries_udp', 'Queries over UDP')
+queries_tcp = Gauge('nsd_queries_tcp', 'Queries over TCP')
+db_mem = Gauge('nsd_db_memory_bytes', 'Memory used by database')
+
+def collect_stats():
+    output = subprocess.check_output(['nsd-control', 'stats']).decode()
+    stats = {}
+    for line in output.strip().split('\n'):
+        if '=' in line:
+            key, value = line.split('=', 1)
+            try:
+                stats[key] = float(value)
+            except ValueError:
+                pass
+    
+    # Update gauges
+    if 'num.queries' in stats:
+        queries_total.set(stats['num.queries'])
+    if 'num.udp' in stats:
+        queries_udp.set(stats['num.udp'])
+    if 'num.tcp' in stats:
+        queries_tcp.set(stats['num.tcp'])
+    if 'size.db.mem' in stats:
+        db_mem.set(stats['size.db.mem'])
+
+if __name__ == '__main__':
+    start_http_server(9167)
+    while True:
+        collect_stats()
+        time.sleep(15)
+```
+
+Run the exporter:
+```bash
+python3 nsd_exporter.py
+```
+
+Prometheus will scrape metrics from `http://localhost:9167/metrics`.
+
+## Zone Statistics
+
+Per-zone statistics (optional feature):
+
+```yaml
+server:
+    zonefiles-check: yes
+    zonefiles-write: 3600
+
+pattern:
+    name: "stats-pattern"
+    zonestats: "stats-zone-name"
+```
+
+This enables per-zone query counters.
+
+## Alerting
+
+### High Query Rate
+
+```bash
+#!/bin/bash
+RATE=$(nsd-control stats | awk -F= '/^num.queries=/ {print $2}')
+if [ $RATE -gt 100000 ]; then
+    echo "ALERT: High query rate: $RATE"
+    # Send alert
+fi
+```
+
+### Expired Zones
+
+```bash
+#!/bin/bash
+EXPIRED=$(nsd-control zonestatus | grep -c 'state: expired')
+if [ $EXPIRED -gt 0 ]; then
+    echo "ALERT: $EXPIRED zones expired"
+    nsd-control zonestatus | grep -B1 'state: expired'
+    # Send alert
+fi
+```
+
+### High Error Rate
+
+```bash
+#!/bin/bash
+ERRORS=$(nsd-control stats | awk -F= '/^num.rcode.SERVFAIL=/ {print $2}')
+if [ $ERRORS -gt 1000 ]; then
+    echo "ALERT: High SERVFAIL rate: $ERRORS"
+    # Send alert
+fi
+```
+
+### Memory Usage
+
+```bash
+#!/bin/bash
+MEM=$(nsd-control stats | awk -F= '/^size.db.mem=/ {print $2}')
+THRESHOLD=1073741824  # 1GB
+if [ $MEM -gt $THRESHOLD ]; then
+    echo "ALERT: High memory usage: $(($MEM / 1024 / 1024))MB"
+    # Send alert
+fi
+```
+
+## Performance Metrics
+
+### Query Rate
+
+Calculate queries per second:
+
+```bash
+nsd-control stats | awk -F= '
+/^num.queries=/ { queries = $2 }
+/^time.elapsed=/ { elapsed = $2 }
+END { if (elapsed > 0) print queries / elapsed " qps" }'
+```
+
+### Cache Hit Ratio
+
+NSD is authoritative only (no cache), but you can monitor answer types:
+
+```bash
+nsd-control stats | awk -F= '
+/^num.rcode.NOERROR=/ { noerror = $2 }
+/^num.rcode.NXDOMAIN=/ { nxdomain = $2 }
+END { 
+    total = noerror + nxdomain
+    if (total > 0)
+        print (noerror / total * 100) "% success rate"
+}'
+```
+
+### Zone Transfer Performance
+
+Monitor transfer times via zonestatus:
+
+```bash
+nsd-control zonestatus | grep -E '(zone:|served-serial:)'
+```
+
+## System Monitoring
+
+### CPU Usage
+
+```bash
+top -b -n 1 -p $(cat /var/run/nsd.pid) | tail -1
+```
+
+### Memory Usage
+
+```bash
+ps aux | grep nsd | grep -v grep | awk '{print $6}'
+```
+
+### File Descriptors
+
+```bash
+ls -1 /proc/$(cat /var/run/nsd.pid)/fd | wc -l
+```
+
+### Network Connections
+
+```bash
+netstat -an | grep :53 | wc -l
+```
+
+## See Also
+
+- [Logging](/operations/logging) - Log configuration
+- [Control Utility](/operations/control-utility) - Runtime commands
+- [Zone Transfers](/operations/zone-transfers) - Zone status monitoring

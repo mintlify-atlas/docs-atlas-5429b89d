@@ -1,0 +1,530 @@
+---
+title: Zone Configuration
+description: Configuring individual zones in NSD
+---
+
+# Zone Configuration
+
+Each zone in NSD is configured in a `zone:` clause. Zones can either be defined directly with all options, or they can reference a `pattern:` to inherit common settings.
+
+## Basic Zone Options
+
+<ParamField path="name" type="string" required>
+The domain name of the zone apex. May end with a '.' (FQDN notation). This attribute must be present in each zone.
+
+```conf
+zone:
+    name: example.com
+    zonefile: example.com.zone
+
+zone:
+    name: example.net.
+    zonefile: example.net.zone
+```
+</ParamField>
+
+<ParamField path="zonefile" type="filename">
+File containing the zone data. If present, used to read and write zone contents. If absent, prevents writing the zone to disk (useful for dynamically generated zones).
+
+```conf
+zone:
+    name: example.com
+    zonefile: /var/nsd/zones/example.com.zone
+```
+
+The zonefile path supports substitution variables for use in patterns:
+- `%s` - Zone name
+- `%1` - First character of zone name
+- `%2` - Second character of zone name  
+- `%3` - Third character of zone name
+- `%z` - Top-level domain name
+- `%y` - Next label under TLD
+- `%x` - Next-next label under TLD
+
+```conf
+pattern:
+    name: "organized"
+    zonefile: "%1/%2/%s.zone"  # Creates directories like a/b/ab.example.com.zone
+```
+
+<Note>
+The `/` character is escaped as "\047" inside `%s`. Directories are created as necessary.
+</Note>
+</ParamField>
+
+<ParamField path="include-pattern" type="pattern-name">
+Include options from the specified pattern at this point. The pattern must be defined before this zone.
+
+```conf
+pattern:
+    name: "secondary"
+    allow-notify: 192.0.2.1 NOKEY
+    request-xfr: 192.0.2.1 NOKEY
+
+zone:
+    name: example.com
+    zonefile: example.com.zone
+    include-pattern: "secondary"
+```
+</ParamField>
+
+## Primary Zone Configuration
+
+Primary zones serve authoritative data and notify secondary servers of changes.
+
+### Example Primary Zone
+
+```conf
+zone:
+    name: primary.example.com
+    zonefile: /etc/nsd/primary.example.com.zone
+    
+    # Notify these secondaries
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2@5353 mykey
+    
+    # Allow zone transfers to secondaries
+    provide-xfr: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.2 mykey
+    provide-xfr: 192.0.2.0/24 NOKEY
+```
+
+### notify
+
+<ParamField path="notify" type="<ip-address> <key-name | NOKEY>">
+Send NOTIFY messages to the specified address (secondary server) when the zone is updated. Port can be specified with @port.
+
+```conf
+zone:
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2@5353 transfer-key
+    notify: 2001:db8::1 NOKEY
+```
+
+The specified TSIG key is used to sign the NOTIFY message.
+
+<Warning>
+Only on secondary configurations will NSD detect zone updates (via NOTIFY or refresh timers).
+</Warning>
+</ParamField>
+
+<ParamField path="notify-retry" type="number" default="5">
+Number of times to retry sending NOTIFY messages.
+
+```conf
+zone:
+    notify: 192.0.2.1 NOKEY
+    notify-retry: 3
+```
+</ParamField>
+
+### provide-xfr
+
+<ParamField path="provide-xfr" type="<ip-spec> <key-name | NOKEY | BLOCKED> [tls-auth-name]">
+Allow the specified address to request zone transfers (AXFR/IXFR). For unlisted or BLOCKED addresses, requests are discarded.
+
+```conf
+zone:
+    # Single address
+    provide-xfr: 192.0.2.1 NOKEY
+    
+    # Subnet
+    provide-xfr: 192.0.2.0/24 transfer-key
+    
+    # IP range
+    provide-xfr: 192.0.2.10-192.0.2.20 NOKEY
+    
+    # Masked
+    provide-xfr: 192.0.2.0&255.255.255.0 NOKEY
+    
+    # Block specific IP
+    provide-xfr: 192.0.2.100 BLOCKED
+    
+    # XFR-over-TLS with authentication
+    provide-xfr: 192.0.2.5 mykey my-tls-auth
+```
+
+BLOCKED supersedes other entries. Entries are evaluated in order.
+</ParamField>
+
+## Secondary Zone Configuration
+
+Secondary zones transfer data from primary servers.
+
+### Example Secondary Zone
+
+```conf
+zone:
+    name: secondary.example.com
+    zonefile: /etc/nsd/secondary.example.com.zone
+    
+    # Accept notifies from primaries
+    allow-notify: 192.0.2.10 NOKEY
+    allow-notify: 192.0.2.11 mykey
+    
+    # Request transfers from primaries  
+    request-xfr: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.11 mykey
+```
+
+### allow-notify
+
+<ParamField path="allow-notify" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Accept NOTIFY messages from the specified primary server addresses. Notifies from unlisted or BLOCKED addresses are discarded.
+
+```conf
+zone:
+    allow-notify: 192.0.2.10 NOKEY
+    allow-notify: 192.0.2.11@5353 notify-key
+    allow-notify: 192.0.2.0/24 NOKEY
+```
+
+Port can be specified with @port notation.
+</ParamField>
+
+### request-xfr
+
+<ParamField path="request-xfr" type="[AXFR|UDP] <ip-address> <key-name | NOKEY> [tls-auth-name]">
+Request zone transfers from the specified primary server.
+
+```conf
+zone:
+    # Standard IXFR/AXFR over TCP
+    request-xfr: 192.0.2.10 NOKEY
+    
+    # Force AXFR only (for primaries that don't support IXFR)
+    request-xfr: AXFR 192.0.2.11 NOKEY
+    
+    # IXFR over UDP (requires TSIG)
+    request-xfr: UDP 192.0.2.12 transfer-key
+    
+    # XFR-over-TLS with authentication (requires TLS 1.3)
+    request-xfr: 192.0.2.13@853 mykey my-tls-auth
+    
+    # Specify port
+    request-xfr: 192.0.2.14@5353 NOKEY
+```
+
+**AXFR option**: Forces AXFR only (no IXFR attempts). Useful when primary runs NSD or doesn't support IXFR.
+
+**UDP option**: Transmits IXFR requests over UDP. Deploy TSIG for security.
+
+**tls-auth-name**: Enables XFR-over-TLS with authentication. Requires TLS 1.3 support and defined tls-auth clause. Default port is 853.
+</ParamField>
+
+<ParamField path="allow-axfr-fallback" type="yes or no" default="yes">
+Allow fallback to AXFR if primary doesn't support IXFR.
+
+```conf
+zone:
+    request-xfr: 192.0.2.10 NOKEY
+    allow-axfr-fallback: no  # Strict IXFR only
+```
+</ParamField>
+
+### Secondary Zone Timers
+
+<ParamField path="max-refresh-time" type="seconds" default="2419200">
+Limit maximum refresh time for secondary zones (normally from SOA record). Default is 4 weeks.
+
+```conf
+zone:
+    max-refresh-time: 86400  # Max 1 day
+```
+</ParamField>
+
+<ParamField path="min-refresh-time" type="seconds" default="0">
+Limit minimum refresh time for secondary zones.
+</ParamField>
+
+<ParamField path="max-retry-time" type="seconds" default="1209600">
+Limit maximum retry time for secondary zones (with exponential backoff). Default is 2 weeks.
+
+```conf
+zone:
+    max-retry-time: 3600  # Max 1 hour retry
+```
+</ParamField>
+
+<ParamField path="min-retry-time" type="seconds" default="0">
+Limit minimum retry time for secondary zones.
+</ParamField>
+
+<ParamField path="min-expire-time" type="seconds or refresh+retry+1" default="0">
+Limit minimum expire time. Can be number of seconds or string "refresh+retry+1".
+
+```conf
+zone:
+    min-expire-time: refresh+retry+1
+```
+
+With "refresh+retry+1", expire time is lower bounded to refresh + retry + 1 second (subject to other timer bounds).
+</ParamField>
+
+### Advanced Secondary Options
+
+<ParamField path="multi-primary-check" type="yes or no" default="no">
+Check all configured primaries and use the highest version number. Useful when primaries have different version numbers.
+
+```conf
+zone:
+    request-xfr: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.11 NOKEY
+    multi-primary-check: yes  # Use highest version
+```
+</ParamField>
+
+<ParamField path="size-limit-xfr" type="number" default="0">
+Limit zone transfer size in bytes. Stops very large transfers that could consume memory and disk. 0 means unlimited.
+
+```conf
+zone:
+    size-limit-xfr: 104857600  # 100MB limit
+```
+</ParamField>
+
+<ParamField path="outgoing-interface" type="<ip-address>">
+Use this local address for outgoing AXFR/IXFR requests or NOTIFY messages. Port can be specified with @port.
+
+```conf
+zone:
+    outgoing-interface: 192.0.2.5
+    outgoing-interface: 2001:db8::5@5353
+```
+</ParamField>
+
+## IXFR Support
+
+<ParamField path="store-ixfr" type="yes or no" default="no">
+Store IXFR data to provide incremental zone transfers to clients specified in `provide-xfr`.
+
+```conf
+zone:
+    store-ixfr: yes
+    ixfr-size: 10485760    # 10MB storage
+    ixfr-number: 10        # Keep 10 versions
+```
+
+IXFR contains smaller change sets between zone versions, whereas AXFR contains full zone.
+</ParamField>
+
+<ParamField path="ixfr-size" type="number" default="1048576">
+Maximum storage in bytes for IXFR versions for this zone. 0 means unlimited.
+</ParamField>
+
+<ParamField path="ixfr-number" type="number" default="5">
+Maximum number of IXFR versions to store.
+</ParamField>
+
+<ParamField path="create-ixfr" type="yes or no" default="no">
+Create IXFR data when zonefile is read by server. Requires `store-ixfr: yes`.
+
+```conf
+zone:
+    store-ixfr: yes
+    create-ixfr: yes  # Generate IXFR on zone reload
+```
+
+Alternatively, use `nsd-checkzone -i` to create IXFR files offline.
+
+<Note>
+IXFR is created when reading from file, but not when receiving AXFR from upstream (upstream generates the IXFR).
+</Note>
+</ParamField>
+
+## Access Control
+
+<ParamField path="allow-query" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Access control list for queries. When specified, only listed addresses can query. Without this option, any IP can query.
+
+```conf
+zone:
+    # Allow specific subnet
+    allow-query: 192.0.2.0/24 NOKEY
+    
+    # Allow with TSIG key required
+    allow-query: 10.0.0.0/8 query-key
+    
+    # Block specific address
+    allow-query: 192.0.2.100 BLOCKED
+```
+
+Useful to prevent leaking zone content that's only meant for XFR over TLS.
+</ParamField>
+
+## Zone Statistics
+
+<ParamField path="zonestats" type="name" default="">
+Collect per-zone statistics in this named group. Output via `nsd-control stats` and `stats_noreset`.
+
+```conf
+zone:
+    name: example.com
+    zonestats: "%s"  # Use zone name as stat group
+
+zone:
+    name: example.net
+    zonestats: "production-zones"
+```
+
+Use `%s` to track each zone individually.
+</ParamField>
+
+## Response Rate Limiting (RRL)
+
+<ParamField path="rrl-whitelist" type="<rrltype>">
+Whitelist specific query types for this zone to receive higher rate limit (whitelist-ratelimit instead of normal ratelimit).
+
+```conf
+zone:
+    name: example.com
+    rrl-whitelist: nxdomain
+    rrl-whitelist: dnskey
+    rrl-whitelist: positive
+```
+
+Available types:
+- `nxdomain` - NXDOMAIN responses
+- `error` - Error responses  
+- `referral` - Referral responses
+- `any` - ANY queries
+- `rrsig` - RRSIG queries
+- `wildcard` - Wildcard responses
+- `nodata` - NODATA responses
+- `dnskey` - DNSKEY queries
+- `positive` - Positive responses
+- `all` - All query types
+</ParamField>
+
+## Zone Verification
+
+<ParamField path="verify-zone" type="yes or no" default="inherit from verify:">
+Enable or disable verification for this zone before publishing.
+
+```conf
+zone:
+    name: dnssec.example.com
+    verify-zone: yes
+    verifier: ldns-verify-zone
+```
+</ParamField>
+
+<ParamField path="verifier" type="command" default="inherit from verify:">
+Command to execute for zone verification. 
+
+```conf
+zone:
+    verify-zone: yes
+    verifier: validns -
+    verifier-feed-zone: yes
+```
+</ParamField>
+
+<ParamField path="verifier-feed-zone" type="yes or no" default="inherit">
+Feed updated zone to verifier over standard input.
+</ParamField>
+
+<ParamField path="verifier-timeout" type="seconds" default="inherit">
+Seconds before verifier is terminated. 0 means no timeout.
+</ParamField>
+
+## Catalog Zones
+
+<ParamField path="catalog" type="consumer or producer">
+Configure zone as catalog consumer or producer.
+
+```conf
+# Catalog consumer zone
+zone:
+    name: catalog.example.com
+    catalog: consumer
+    catalog-member-pattern: "member-pattern"
+
+# Catalog producer zone
+zone:
+    name: catalog-prod.example.com  
+    catalog: producer
+```
+
+Only one consumer zone is allowed. Member zones use the pattern from group property or `catalog-member-pattern` fallback.
+</ParamField>
+
+<ParamField path="catalog-member-pattern" type="pattern-name">
+Default pattern for catalog consumer member zones when group property is missing or invalid.
+</ParamField>
+
+## Complete Examples
+
+### Simple Primary Zone
+
+```conf
+zone:
+    name: primary.example.com
+    zonefile: primary.example.com.zone
+    notify: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.1 NOKEY
+```
+
+### DNSSEC Secondary with IXFR
+
+```conf
+zone:
+    name: secondary.example.com
+    zonefile: secondary.example.com.zone
+    
+    # Primary servers
+    allow-notify: 192.0.2.10 transfer-key
+    request-xfr: 192.0.2.10 transfer-key
+    
+    # Enable IXFR storage
+    store-ixfr: yes
+    ixfr-size: 10485760
+    ixfr-number: 10
+    
+    # Verify DNSSEC
+    verify-zone: yes
+    verifier: ldns-verify-zone
+```
+
+### High-Security Zone with XFR-over-TLS
+
+```conf
+zone:
+    name: secure.example.com
+    zonefile: secure.example.com.zone
+    
+    # Accept transfers over TLS only
+    allow-notify: 192.0.2.10 mykey
+    request-xfr: 192.0.2.10@853 mykey secure-tls-auth
+    allow-axfr-fallback: no
+    
+    # Restricted queries
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 192.0.2.0/24 NOKEY
+```
+
+### Zone Using Pattern
+
+```conf
+pattern:
+    name: "common-secondary"
+    allow-notify: 192.0.2.10 NOKEY
+    request-xfr: 192.0.2.10 NOKEY
+    max-refresh-time: 86400
+    max-retry-time: 3600
+    zonefile: "%s.zone"
+
+zone:
+    name: zone1.example.com
+    include-pattern: "common-secondary"
+
+zone:
+    name: zone2.example.com
+    include-pattern: "common-secondary"
+```
+
+## See Also
+
+- [Server Options](/configuration/server-options)
+- [Patterns](/configuration/patterns)  
+- [Access Control](/configuration/access-control)

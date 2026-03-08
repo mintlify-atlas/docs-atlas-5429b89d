@@ -1,0 +1,589 @@
+---
+title: "TSIG Authentication"
+description: "Transaction Signature (TSIG) configuration for secure DNS operations in NSD"
+---
+
+# TSIG Authentication
+
+Transaction Signature (TSIG) provides cryptographic authentication for DNS messages, primarily used to secure zone transfers (AXFR/IXFR) and NOTIFY messages between DNS servers.
+
+## Overview
+
+TSIG uses shared secret keys and HMAC algorithms to sign DNS messages, ensuring that:
+
+- Messages come from an authenticated source
+- Messages have not been tampered with
+- Messages are received within an acceptable time window
+
+From `tsig.c:5`, NSD implements RFC 2845 TSIG with support for multiple HMAC algorithms.
+
+<Note>
+TSIG provides transaction-level security, not data-level security. For data authentication, use DNSSEC. TSIG is ideal for securing server-to-server communications.
+</Note>
+
+## TSIG Architecture
+
+### Key Components
+
+1. **Shared Secret**: Base64-encoded key material known to both parties
+2. **Algorithm**: HMAC function used for signing (MD5, SHA1, SHA256, SHA384, SHA512)
+3. **Key Name**: Domain name identifying the key
+4. **MAC**: Message Authentication Code computed over the DNS message
+5. **Time Values**: Timestamp and fudge factor for replay protection
+
+### Signing Process
+
+From the source code (`tsig.c:484`):
+
+```c
+void tsig_sign(tsig_record_type *tsig)
+{
+    uint64_t current_time = (uint64_t) time(NULL);
+    tsig->signed_time_high = (uint16_t) (current_time >> 32);
+    tsig->signed_time_low = (uint32_t) current_time;
+    tsig->signed_time_fudge = 300; /* 5 minutes */
+
+    tsig_digest_variables(tsig, tsig->response_count > 1);
+
+    tsig->algorithm->hmac_final(tsig->context,
+                                tsig->prior_mac_data,
+                                &tsig->prior_mac_size);
+
+    tsig->mac_size = tsig->prior_mac_size;
+    tsig->mac_data = tsig->prior_mac_data;
+}
+```
+
+## Supported Algorithms
+
+NSD supports multiple HMAC algorithms for TSIG. From `tsig.c:236`:
+
+```c
+tsig_algorithm_type * tsig_get_algorithm_by_name(const char *name)
+{
+    // Supports: hmac-md5, hmac-sha1, hmac-sha224, 
+    //           hmac-sha256, hmac-sha384, hmac-sha512
+    // Can also use short names: md5, sha1, sha256, etc.
+}
+```
+
+### Algorithm Comparison
+
+| Algorithm | Key Size | Security | Performance | Recommendation |
+|-----------|----------|----------|-------------|----------------|
+| **hmac-md5** | 128 bits | Weak | Fastest | Legacy only |
+| **hmac-sha1** | 160 bits | Deprecated | Fast | Avoid |
+| **hmac-sha224** | 224 bits | Good | Medium | Acceptable |
+| **hmac-sha256** | 256 bits | Strong | Medium | **Recommended** |
+| **hmac-sha384** | 384 bits | Very Strong | Slower | High security |
+| **hmac-sha512** | 512 bits | Very Strong | Slower | High security |
+
+<Warning>
+**hmac-md5** and **hmac-sha1** are cryptographically weak and should only be used for compatibility with legacy systems. New deployments must use **hmac-sha256** or stronger.
+</Warning>
+
+## Configuration
+
+### Key Generation
+
+<Steps>
+
+### Generate Secret
+
+Generate a cryptographically random secret:
+
+```bash
+# SHA-256 key (32 bytes = 256 bits)
+dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64
+
+# SHA-512 key (64 bytes = 512 bits)
+dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64
+```
+
+### Alternative: Using OpenSSL
+
+```bash
+# Generate 256-bit key
+openssl rand -base64 32
+
+# Generate 512-bit key
+openssl rand -base64 64
+```
+
+### Define Key in NSD
+
+Add the key to `nsd.conf`:
+
+```conf
+key:
+    name: "transfer-key"
+    algorithm: hmac-sha256
+    secret: "6KM6qiKfwfEpamEq72HQdA=="
+```
+
+</Steps>
+
+### Basic TSIG Configuration
+
+<Tabs>
+  <Tab title="Primary Server">
+    ```conf
+    # Define the TSIG key
+    key:
+        name: "transfer-key"
+        algorithm: hmac-sha256
+        secret: "your-base64-secret-here=="
+
+    # Primary zone allowing transfers with TSIG
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        # Allow zone transfers only with TSIG
+        provide-xfr: 192.0.2.10 transfer-key
+        provide-xfr: 2001:db8::10 transfer-key
+        
+        # Send notifies with TSIG
+        notify: 192.0.2.10 transfer-key
+        notify: 2001:db8::10 transfer-key
+    ```
+  </Tab>
+  
+  <Tab title="Secondary Server">
+    ```conf
+    # Define the same TSIG key
+    key:
+        name: "transfer-key"
+        algorithm: hmac-sha256
+        secret: "your-base64-secret-here=="
+
+    # Secondary zone using TSIG
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        # Request transfers with TSIG
+        request-xfr: AXFR 192.0.2.1 transfer-key
+        
+        # Accept notifies only with TSIG
+        allow-notify: 192.0.2.1 transfer-key
+    ```
+  </Tab>
+  
+  <Tab title="Key in Separate File">
+    ```conf
+    # Main nsd.conf
+    # Include keys from separate file for security
+    include: "/etc/nsd/keys.conf"
+
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        provide-xfr: 192.0.2.10 transfer-key
+        notify: 192.0.2.10 transfer-key
+    ```
+
+    ```conf
+    # /etc/nsd/keys.conf
+    # Restrict permissions: chmod 600 /etc/nsd/keys.conf
+    key:
+        name: "transfer-key"
+        algorithm: hmac-sha256
+        secret: "6KM6qiKfwfEpamEq72HQdA=="
+
+    key:
+        name: "update-key"
+        algorithm: hmac-sha384
+        secret: "longersecretforsha384=="
+    ```
+  </Tab>
+</Tabs>
+
+### Multiple Keys Configuration
+
+For different security levels or key rotation:
+
+```conf
+# Production transfer key
+key:
+    name: "prod-xfr-key"
+    algorithm: hmac-sha256
+    secret: "productionkeysecret=="
+
+# Staging transfer key
+key:
+    name: "staging-xfr-key"
+    algorithm: hmac-sha256
+    secret: "stagingkeysecret=="
+
+# Management key (notify only)
+key:
+    name: "mgmt-notify-key"
+    algorithm: hmac-sha256
+    secret: "managementkeysecret=="
+
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Multiple servers with different keys
+    provide-xfr: 192.0.2.10 prod-xfr-key
+    provide-xfr: 192.0.2.20 staging-xfr-key
+    
+    notify: 192.0.2.10 prod-xfr-key
+    notify: 192.0.2.20 staging-xfr-key
+    notify: 192.0.2.100 mgmt-notify-key
+```
+
+## TSIG with Zone Transfers
+
+### AXFR with TSIG
+
+```conf
+# Force AXFR (no IXFR) with TSIG authentication
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    request-xfr: AXFR 192.0.2.1 transfer-key
+    allow-notify: 192.0.2.1 transfer-key
+```
+
+### IXFR over UDP with TSIG
+
+<Warning>
+When using UDP for IXFR, TSIG is **critical** for security. UDP transfers without TSIG are vulnerable to spoofing attacks.
+</Warning>
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # IXFR over UDP (requires TSIG for security)
+    request-xfr: UDP 192.0.2.1 transfer-key
+    allow-notify: 192.0.2.1 transfer-key
+```
+
+## Access Control with TSIG
+
+### Query ACLs with TSIG
+
+Restrict queries to specific addresses and keys:
+
+```conf
+zone:
+    name: "internal.example.com"
+    zonefile: "/var/nsd/zones/internal.example.com.zone"
+    
+    # Allow queries only from specific networks with TSIG
+    allow-query: 10.0.0.0/8 internal-key
+    allow-query: 172.16.0.0/12 internal-key
+    
+    # Block all other queries
+    allow-query: 0.0.0.0/0 BLOCKED
+    allow-query: ::0/0 BLOCKED
+```
+
+### Combining NOKEY and TSIG
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Allow transfers from trusted network without TSIG
+    provide-xfr: 192.0.2.0/24 NOKEY
+    
+    # Require TSIG from untrusted networks
+    provide-xfr: 0.0.0.0/0 secure-transfer-key
+    
+    # Block specific networks entirely
+    provide-xfr: 203.0.113.0/24 BLOCKED
+```
+
+## Time-Based Security
+
+### Time Validation
+
+TSIG includes timestamp validation to prevent replay attacks. From `tsig.c:386`:
+
+```c
+int tsig_from_query(tsig_record_type *tsig)
+{
+    signed_time = ((((uint64_t) tsig->signed_time_high) << 32) |
+                   ((uint64_t) tsig->signed_time_low));
+    
+    current_time = (uint64_t) time(NULL);
+    
+    // Check if time is within fudge window (default 300 seconds)
+    if ((current_time < signed_time - tsig->signed_time_fudge)
+        || (current_time > signed_time + tsig->signed_time_fudge))
+    {
+        tsig->error_code = TSIG_ERROR_BADTIME;
+        return 0;
+    }
+}
+```
+
+**Default fudge: 300 seconds (5 minutes)**
+
+<Note>
+Ensure server clocks are synchronized using NTP. Clock skew exceeding the fudge window (300 seconds) will cause TSIG validation failures.
+</Note>
+
+### Time Synchronization
+
+```bash
+# Check time sync status
+timedatectl status
+
+# Verify NTP is active
+systemctl status systemd-timesyncd
+# or
+systemctl status ntpd
+
+# Check clock offset
+ntpq -p
+```
+
+## Error Codes
+
+From `tsig.h:20` and `tsig.c:260`:
+
+| Error Code | Name | Description |
+|------------|------|-------------|
+| 0 | NOERROR | Validation successful |
+| 16 | BADSIG | MAC validation failed |
+| 17 | BADKEY | Key not found or algorithm mismatch |
+| 18 | BADTIME | Time not within fudge window |
+
+### Handling Errors
+
+```c
+const char * tsig_error(int error_code)
+{
+    switch (error_code) {
+    case TSIG_ERROR_NOERROR:
+        return "No Error";
+    case TSIG_ERROR_BADSIG:
+        return "Bad Signature";
+    case TSIG_ERROR_BADKEY:
+        return "Bad Key";
+    case TSIG_ERROR_BADTIME:
+        return "Bad Time";
+    }
+}
+```
+
+## Key Management
+
+### Key Rotation
+
+<Steps>
+
+### Add New Key
+
+Add the new key alongside the old key:
+
+```conf
+key:
+    name: "old-transfer-key"
+    algorithm: hmac-sha256
+    secret: "oldkeysecret=="
+
+key:
+    name: "new-transfer-key"
+    algorithm: hmac-sha256
+    secret: "newkeysecret=="
+```
+
+### Configure Both Keys
+
+Configure servers to accept both keys:
+
+```conf
+# On primary
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    provide-xfr: 192.0.2.10 old-transfer-key
+    provide-xfr: 192.0.2.10 new-transfer-key
+    notify: 192.0.2.10 new-transfer-key
+```
+
+### Update Secondaries
+
+Update each secondary to use the new key:
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    request-xfr: AXFR 192.0.2.1 new-transfer-key
+    allow-notify: 192.0.2.1 old-transfer-key
+    allow-notify: 192.0.2.1 new-transfer-key
+```
+
+### Remove Old Key
+
+After all secondaries are updated and confirmed working:
+
+```conf
+# Remove old key from configuration
+key:
+    name: "new-transfer-key"
+    algorithm: hmac-sha256
+    secret: "newkeysecret=="
+
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    provide-xfr: 192.0.2.10 new-transfer-key
+    notify: 192.0.2.10 new-transfer-key
+```
+
+</Steps>
+
+### Key Storage Security
+
+<Warning>
+**Protect your TSIG keys:**
+
+```bash
+# Store keys in separate file with restricted permissions
+chmod 600 /etc/nsd/keys.conf
+chown root:nsd /etc/nsd/keys.conf
+
+# Verify permissions
+ls -la /etc/nsd/keys.conf
+# Should show: -rw------- 1 root nsd
+```
+</Warning>
+
+## Debugging and Monitoring
+
+### Enable TSIG Logging
+
+```conf
+server:
+    verbosity: 2
+```
+
+At verbosity 2, NSD logs:
+- TSIG key validation failures
+- BADTIME errors
+- BADSIG errors
+
+### Test TSIG with dig
+
+```bash
+# Query with TSIG (using tsig-keygen format)
+dig @192.0.2.1 example.com AXFR \
+    -y hmac-sha256:transfer-key:6KM6qiKfwfEpamEq72HQdA==
+
+# Alternative format
+dig @192.0.2.1 example.com AXFR \
+    -k /path/to/key.tsig
+```
+
+### Key File Format for dig
+
+```
+# /path/to/key.tsig
+key "transfer-key" {
+    algorithm hmac-sha256;
+    secret "6KM6qiKfwfEpamEq72HQdA==";
+};
+```
+
+### Common Issues
+
+<Accordion title="BADTIME Errors">
+  **Symptom**: Transfer fails with TSIG BADTIME error
+
+  **Cause**: Clock skew between servers exceeds 300 seconds
+
+  **Solution**:
+  ```bash
+  # Check time difference
+  date -u; ssh remote-server date -u
+  
+  # Sync clocks with NTP
+  ntpdate pool.ntp.org
+  # or
+  timedatectl set-ntp true
+  ```
+</Accordion>
+
+<Accordion title="BADSIG Errors">
+  **Symptom**: Transfer fails with TSIG BADSIG error
+
+  **Cause**: 
+  - Mismatched secrets
+  - Different algorithms
+  - Trailing whitespace in secret
+
+  **Solution**:
+  ```bash
+  # Verify key configuration matches on both servers
+  nsd-checkconf /etc/nsd/nsd.conf | grep -A3 "name: transfer-key"
+  
+  # Generate new key and reconfigure if needed
+  openssl rand -base64 32
+  ```
+</Accordion>
+
+<Accordion title="BADKEY Errors">
+  **Symptom**: Transfer fails with TSIG BADKEY error
+
+  **Cause**:
+  - Key name mismatch
+  - Key not defined in configuration
+  - Case sensitivity in key name
+
+  **Solution**:
+  ```bash
+  # List configured keys
+  nsd-checkconf /etc/nsd/nsd.conf | grep "name:"
+  
+  # Ensure key name matches exactly (case-sensitive)
+  ```
+</Accordion>
+
+## Performance Considerations
+
+### Algorithm Performance
+
+From benchmarks, relative performance:
+
+- **hmac-md5**: 1.0× (baseline, but insecure)
+- **hmac-sha256**: 0.8× (recommended)
+- **hmac-sha512**: 0.6×
+
+<Note>
+The performance difference is negligible for zone transfers. Choose **hmac-sha256** or stronger for security, not performance.
+</Note>
+
+### Memory Usage
+
+TSIG context uses minimal memory:
+
+```c
+struct tsig_record
+{
+    void *context;                    // HMAC context (~200 bytes)
+    uint8_t *prior_mac_data;          // Previous MAC (32-64 bytes)
+    uint8_t *mac_data;                // Current MAC (32-64 bytes)
+    region_type *rr_region;           // Memory region
+    region_type *context_region;      // HMAC context region
+};
+```
+
+Typical memory: **500-1000 bytes per active TSIG operation**
+
+## Related Topics
+
+- [DNSSEC Configuration](/advanced/dnssec) - Data authentication
+- [Catalog Zones](/advanced/catalog-zones) - Automated zone provisioning with TSIG
+- [Zone Expiry](/advanced/zone-expiry) - Understanding zone transfer timing
+- [TLS Authentication](/configuration/access-control) - XFR-over-TLS for encrypted transfers

@@ -1,0 +1,548 @@
+---
+title: nsd-control
+description: NSD remote server control utility
+---
+
+# nsd-control
+
+Remote administration utility for NSD DNS server
+
+## Synopsis
+
+```bash
+nsd-control [-c cfgfile] [-s server[@port]] command
+```
+
+## Description
+
+**nsd-control** performs remote administration on the [nsd(8)](/reference/nsd) DNS server. It reads the configuration file, contacts the NSD server over SSL, sends the command, and displays the result.
+
+Commands that require a reload are queued, and the result indicates the command was accepted.
+
+## Options
+
+<ParamField path="-h" type="flag">
+  Show the version and command-line option help.
+</ParamField>
+
+<ParamField path="-c" type="string">
+  The config file to read with settings. If not given, the default config file is used.
+  
+  ```bash
+  nsd-control -c /etc/nsd/nsd.conf reload
+  ```
+</ParamField>
+
+<ParamField path="-s" type="string">
+  IPv4 or IPv6 address of the server to contact. If not given, the address is read from the config file.
+  
+  ```bash
+  nsd-control -s 127.0.0.1@8952 status
+  nsd-control -s ::1 reload
+  ```
+</ParamField>
+
+## Commands
+
+### Server Control
+
+<ParamField path="start">
+  Start the server. Simply execs [nsd(8)](/reference/nsd). The NSD executable is searched at the default location relative to the installation prefix. Override by setting `NSD_PATH` environment variable.
+  
+  ```bash
+  nsd-control start
+  ```
+</ParamField>
+
+<ParamField path="stop">
+  Stop the server. The server daemon exits gracefully.
+  
+  ```bash
+  nsd-control stop
+  ```
+</ParamField>
+
+<ParamField path="reload" type="string">
+  Reload zone files and reopen log file.
+  
+  - Without argument: Reads changed zone files
+  - With zone argument: Reads the zone file for the given zone and loads it
+  
+  ```bash
+  nsd-control reload
+  nsd-control reload example.com
+  ```
+</ParamField>
+
+<ParamField path="reconfig">
+  Reload nsd.conf and apply changes to TSIG keys, configuration patterns, and zone additions/removals. Other changes (like listening address, port, chroot) are not applied. New patterns become available for `addzone` command.
+  
+  ```bash
+  nsd-control reconfig
+  ```
+</ParamField>
+
+<ParamField path="repattern">
+  Same as `reconfig`.
+</ParamField>
+
+<ParamField path="log_reopen">
+  Reopen the log file. Useful for log rotation. Can also be triggered with `kill -HUP`.
+  
+  ```bash
+  nsd-control log_reopen
+  ```
+</ParamField>
+
+<ParamField path="status">
+  Display server status.
+  
+  Exit codes:
+  - **0**: Running
+  - **1**: Error
+  - **3**: Not running (connection refused)
+  
+  ```bash
+  nsd-control status
+  ```
+</ParamField>
+
+### Statistics
+
+<ParamField path="stats">
+  Output statistics as name=value lines. Requires NSD to be compiled with statistics enabled. Counters are zeroed after output.
+  
+  ```bash
+  nsd-control stats
+  ```
+</ParamField>
+
+<ParamField path="stats_noreset">
+  Same as `stats`, but does not zero the counters.
+  
+  ```bash
+  nsd-control stats_noreset
+  ```
+</ParamField>
+
+### Zone Management
+
+<ParamField path="addzone" type="string">
+  Add a new zone to the running server. Format: `addzone <zone name> <pattern name>`
+  
+  The zone is added to the zonelist file on disk and persists after restart. For secondary zones, zone transfer is immediately attempted. For zones with a zonefile, the file is read.
+  
+  ```bash
+  nsd-control addzone example.org secondary-pattern
+  ```
+</ParamField>
+
+<ParamField path="delzone" type="string">
+  Remove zone from the running server. The zone is removed from:
+  - Zonelist file on disk
+  - Memory
+  - nsd.db file
+  
+  Zonefile remains but may be outdated. Zones configured in nsd.conf itself cannot be removed this way.
+  
+  ```bash
+  nsd-control delzone example.org
+  ```
+</ParamField>
+
+<ParamField path="changezone" type="string">
+  Change a zone to use a different pattern. Format: `changezone <zone name> <pattern name>`
+  
+  The zone is deleted and re-added in one operation. Zones in nsd.conf cannot be changed this way.
+  
+  ```bash
+  nsd-control changezone example.org new-pattern
+  ```
+</ParamField>
+
+<ParamField path="addzones">
+  Add zones read from stdin. Input format: one line per zone with `name space patternname`. For bulk additions.
+  
+  ```bash
+  cat zones.txt | nsd-control addzones
+  # zones.txt:
+  # example.org secondary-pattern
+  # example.net secondary-pattern
+  ```
+</ParamField>
+
+<ParamField path="delzones">
+  Remove zones read from stdin. Input format: one name per line. For bulk removals.
+  
+  ```bash
+  cat zones.txt | nsd-control delzones
+  # zones.txt:
+  # example.org
+  # example.net
+  ```
+</ParamField>
+
+### Zone Operations
+
+<ParamField path="write" type="string">
+  Write zone files to disk. Writes zones that have changed (via AXFR or IXFR) or creates zonefile if it doesn't exist. Directory components are created if necessary.
+  
+  - Without argument: Write all modified zones
+  - With zone argument: Write that zone if modified
+  
+  ```bash
+  nsd-control write
+  nsd-control write example.com
+  ```
+</ParamField>
+
+<ParamField path="notify" type="string">
+  Send NOTIFY messages to secondary servers configured in `notify:` lists for primary zones.
+  
+  - Without argument: Notify for all zones
+  - With zone argument: Notify for that zone
+  
+  ```bash
+  nsd-control notify
+  nsd-control notify example.com
+  ```
+</ParamField>
+
+<ParamField path="transfer" type="string">
+  Attempt to update secondary zones by contacting primaries configured via `request-xfr:` lists. Resets backoff timeout for zones with no content.
+  
+  - Without argument: Transfer all zones
+  - With zone argument: Transfer that zone
+  
+  ```bash
+  nsd-control transfer
+  nsd-control transfer example.com
+  ```
+</ParamField>
+
+<ParamField path="force_transfer" type="string">
+  Force update secondary zones. Performs full AXFR even if primary has same serial number.
+  
+  - Without argument: Force transfer all zones
+  - With zone argument: Force transfer that zone
+  
+  ```bash
+  nsd-control force_transfer example.com
+  ```
+</ParamField>
+
+<ParamField path="zonestatus" type="string">
+  Print zone state, serial numbers, and timestamps.
+  
+  States:
+  - **primary**: Primary zone
+  - **ok**: Secondary zone is up-to-date
+  - **expired**: Secondary zone has expired
+  - **refreshing**: Secondary zone has active transfers
+  
+  Serial numbers shown:
+  - **served-serial**: Currently active
+  - **commit-serial**: In reload
+  - **notified-serial**: Got notify, fetching data
+  
+  ```bash
+  nsd-control zonestatus
+  nsd-control zonestatus example.com
+  ```
+</ParamField>
+
+### Server Information
+
+<ParamField path="serverpid">
+  Print the PID of the server process. Used for statistics (only works when NSD is compiled with statistics enabled).
+  
+  Do not use this PID for sending signals; use the PID from nsd.pid instead.
+  
+  ```bash
+  nsd-control serverpid
+  ```
+</ParamField>
+
+<ParamField path="verbosity" type="number">
+  Change logging verbosity level.
+  
+  ```bash
+  nsd-control verbosity 2
+  ```
+</ParamField>
+
+### TSIG Key Management
+
+<ParamField path="print_tsig" type="string">
+  Print TSIG key secret and algorithm.
+  
+  - Without argument: List all TSIG keys
+  - With key name: Print that key
+  
+  ```bash
+  nsd-control print_tsig
+  nsd-control print_tsig mykey
+  ```
+</ParamField>
+
+<ParamField path="update_tsig" type="string">
+  Change existing TSIG key to new secret. Format: `update_tsig <name> <secret>`
+  
+  Secret is base64 encoded. Changes are in-memory only and lost on restart.
+  
+  ```bash
+  nsd-control update_tsig mykey K2tf3TRjvQkVCmJF3/Z9vA==
+  ```
+</ParamField>
+
+<ParamField path="add_tsig" type="string">
+  Add new TSIG key. Format: `add_tsig <name> <secret> [algo]`
+  
+  Default algorithm is hmac-sha256. Secret is base64 encoded. Changes are in-memory only.
+  
+  ```bash
+  nsd-control add_tsig mykey K2tf3TRjvQkVCmJF3/Z9vA==
+  nsd-control add_tsig mykey K2tf3TRjvQkVCmJF3/Z9vA== hmac-sha512
+  ```
+</ParamField>
+
+<ParamField path="assoc_tsig" type="string">
+  Associate zone with TSIG key. Format: `assoc_tsig <zone> <key_name>`
+  
+  Adjusts ACLs for notify, allow-notify, provide-xfr, and request-xfr to use the given key.
+  
+  ```bash
+  nsd-control assoc_tsig example.com mykey
+  ```
+</ParamField>
+
+<ParamField path="del_tsig" type="string">
+  Delete TSIG key. Prints error if key is in use. Changes are in-memory only.
+  
+  ```bash
+  nsd-control del_tsig mykey
+  ```
+</ParamField>
+
+### DNS Cookie Management
+
+<ParamField path="add_cookie_secret" type="string">
+  Add or replace a cookie secret persistently. Secret must be a 128-bit hex string.
+  
+  Cookie secrets can be **active** (used to create cookies) or **staging** (only for verification).
+  
+  - First secret added becomes active
+  - If active secret exists, new secret becomes staging
+  
+  For anycast rollover:
+  1. Add new secret as staging on all nodes
+  2. Activate on all nodes with `activate_cookie_secret`
+  3. Wait 1 hour
+  4. Drop old secret with `drop_cookie_secret`
+  
+  ```bash
+  nsd-control add_cookie_secret 0123456789abcdef0123456789abcdef
+  ```
+</ParamField>
+
+<ParamField path="drop_cookie_secret">
+  Drop the staging cookie secret.
+  
+  ```bash
+  nsd-control drop_cookie_secret
+  ```
+</ParamField>
+
+<ParamField path="activate_cookie_secret">
+  Make the current staging secret active, and the current active secret staging.
+  
+  ```bash
+  nsd-control activate_cookie_secret
+  ```
+</ParamField>
+
+<ParamField path="print_cookie_secrets">
+  Show current cookie secrets with their status (active or staging).
+  
+  ```bash
+  nsd-control print_cookie_secrets
+  ```
+</ParamField>
+
+## Exit Code
+
+The nsd-control program exits with:
+- **0**: Success
+- **1**: Error
+
+## Setup
+
+Remote control requires self-signed certificates and private keys for both server and client.
+
+### Using nsd-control-setup
+
+The `nsd-control-setup` script generates the required certificates and keys in the default run directory (or use `-d` for another directory).
+
+```bash
+sudo nsd-control-setup
+```
+
+The script:
+- Generates server and client certificates
+- Preserves existing private keys
+- Sets proper permissions (owner and group readable only)
+
+After running the script:
+1. Turn on `control-enable: yes` in [nsd.conf](/reference/nsd-conf)
+2. Restart NSD
+
+## Statistic Counters
+
+The `stats` and `stats_noreset` commands show these counters:
+
+### Query Statistics
+
+<ParamField path="num.queries">
+  Total queries received (tls + tcp + udp).
+</ParamField>
+
+<ParamField path="serverX.queries">
+  Queries handled by server process X. Number of processes set by `server-count`.
+</ParamField>
+
+<ParamField path="num.type.X">
+  Queries with this query type (A, AAAA, MX, etc.).
+</ParamField>
+
+<ParamField path="num.opcode.X">
+  Queries with this opcode.
+</ParamField>
+
+<ParamField path="num.class.X">
+  Queries with this query class.
+</ParamField>
+
+<ParamField path="num.rcode.X">
+  Answers with this return code.
+</ParamField>
+
+### Transport Statistics
+
+<ParamField path="num.edns">
+  Queries with EDNS OPT.
+</ParamField>
+
+<ParamField path="num.ednserr">
+  Queries which failed EDNS parse.
+</ParamField>
+
+<ParamField path="num.udp">
+  Queries over UDP IPv4.
+</ParamField>
+
+<ParamField path="num.udp6">
+  Queries over UDP IPv6.
+</ParamField>
+
+<ParamField path="num.tcp">
+  Connections over TCP IPv4.
+</ParamField>
+
+<ParamField path="num.tcp6">
+  Connections over TCP IPv6.
+</ParamField>
+
+<ParamField path="num.tls">
+  Connections over TLS IPv4 (not part of num.tcp).
+</ParamField>
+
+<ParamField path="num.tls6">
+  Connections over TLS IPv6 (not part of num.tcp6).
+</ParamField>
+
+### Answer Statistics
+
+<ParamField path="num.answer_wo_aa">
+  Answers with NOERROR rcode without AA flag (includes referrals).
+</ParamField>
+
+<ParamField path="num.rxerr">
+  Queries for which receive failed.
+</ParamField>
+
+<ParamField path="num.txerr">
+  Answers for which transmit failed.
+</ParamField>
+
+<ParamField path="num.raxfr">
+  AXFR requests from clients (served with reply).
+</ParamField>
+
+<ParamField path="num.rixfr">
+  IXFR requests from clients (served with reply).
+</ParamField>
+
+<ParamField path="num.truncated">
+  Answers with TC flag set.
+</ParamField>
+
+<ParamField path="num.dropped">
+  Queries dropped due to failed sanity check.
+</ParamField>
+
+### Timing Statistics
+
+<ParamField path="time.boot">
+  Uptime in seconds since server started (with fractional seconds).
+</ParamField>
+
+<ParamField path="time.elapsed">
+  Time since last stats report in seconds (with fractional seconds). Can be zero if polled quickly.
+</ParamField>
+
+### Size Statistics
+
+<ParamField path="size.db.disk">
+  Size of nsd.db on disk in bytes.
+</ParamField>
+
+<ParamField path="size.db.mem">
+  Size of DNS database in memory in bytes.
+</ParamField>
+
+<ParamField path="size.xfrd.mem">
+  Memory for zone transfers and notifies in xfrd process (excludes TSIG data) in bytes.
+</ParamField>
+
+<ParamField path="size.config.disk">
+  Size of zonelist file on disk (excludes nsd.conf) in bytes.
+</ParamField>
+
+<ParamField path="size.config.mem">
+  Size of config data in memory (kept in both server and xfrd) in bytes.
+</ParamField>
+
+### Zone Statistics
+
+<ParamField path="zone.primary">
+  Number of primary zones served (zones without `request-xfr:`). Also output as `zone.master`.
+</ParamField>
+
+<ParamField path="zone.secondary">
+  Number of secondary zones served (zones with `request-xfr`). Also output as `zone.slave`.
+</ParamField>
+
+## Files
+
+- Default config file: `/etc/nsd/nsd.conf` (or compile-time default)
+- Certificate directory: `/etc/nsd/` (or compile-time default)
+  - `nsd_server.key` - Server private key
+  - `nsd_server.pem` - Server certificate
+  - `nsd_control.key` - Client private key
+  - `nsd_control.pem` - Client certificate
+
+## See Also
+
+- [nsd.conf(5)](/reference/nsd-conf) - NSD configuration file
+- [nsd(8)](/reference/nsd) - NSD name server daemon
+- [nsd-checkconf(8)](/reference/nsd-checkconf) - Check NSD configuration

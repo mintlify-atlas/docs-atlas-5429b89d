@@ -1,0 +1,262 @@
+---
+title: nsd-checkconf
+description: NSD configuration file checker
+---
+
+# nsd-checkconf
+
+Validate and query NSD configuration files
+
+## Synopsis
+
+```bash
+nsd-checkconf [-v] [-f] [-h] [-o option] [-z zonename] 
+              [-p pattern] [-s keyname] [-t tlsauthname] 
+              configfile
+```
+
+## Description
+
+**nsd-checkconf** reads a configuration file and checks it for errors. It prints parse errors to standard error and performs additional validation checks on the contents.
+
+This utility is used to:
+- Check config files for errors before using them in [nsd(8)](/reference/nsd)
+- Query configuration values from shell scripts
+- Extract specific configuration options for automation
+
+The config file format is described in [nsd.conf(5)](/reference/nsd-conf).
+
+## Options
+
+<ParamField path="-v" type="flag">
+  After reading, print the options to standard output in config file format. Without this option, only success or parse errors are reported.
+  
+  ```bash
+  nsd-checkconf -v /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-f" type="flag">
+  Print full pathname when used with files, like with `-o pidfile`. This includes the chroot in the way it is applied to the pidfile.
+  
+  ```bash
+  nsd-checkconf -f -o pidfile /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-h" type="flag">
+  Print usage help information and exit.
+</ParamField>
+
+<ParamField path="-o" type="string">
+  Return only this option from the config file. Can be used with `-z` (zone) and `-p` (pattern), or without them to query the server section.
+  
+  Special values:
+  - `zones` - Print list of configured zones
+  - `patterns` - Print list of configured patterns
+  
+  If `-z` is given without `-o`, nothing is printed.
+  
+  ```bash
+  # Get server port
+  nsd-checkconf -o port /etc/nsd/nsd.conf
+  
+  # Get zone-specific option
+  nsd-checkconf -z example.com -o zonefile /etc/nsd/nsd.conf
+  
+  # List all zones
+  nsd-checkconf -o zones /etc/nsd/nsd.conf
+  
+  # List all patterns
+  nsd-checkconf -o patterns /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-s" type="string">
+  Print the key secret (base64 blob) configured for this TSIG key name. Used to help shell scripts parse the config file.
+  
+  ```bash
+  nsd-checkconf -s mykey /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-t" type="string">
+  Print the authentication domain name configured for this tls-auth clause. Used to help shell scripts parse the config file.
+  
+  ```bash
+  nsd-checkconf -t my-tls-auth /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-p" type="string">
+  Return the option specified with `-o` for the given pattern name.
+  
+  ```bash
+  nsd-checkconf -p secondary-pattern -o zonefile /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+<ParamField path="-z" type="string">
+  Return the option specified with `-o` for the given zone name.
+  
+  If this option is not given, the server section of the config file is used.
+  
+  ```bash
+  nsd-checkconf -z example.com -o zonefile /etc/nsd/nsd.conf
+  ```
+</ParamField>
+
+## Examples
+
+### Basic Validation
+
+Check a config file for syntax errors:
+
+```bash
+nsd-checkconf /etc/nsd/nsd.conf
+```
+
+If the file is valid, no output is produced and the exit code is 0. If there are errors, they are printed to stderr.
+
+### Query Server Options
+
+Get the server port:
+
+```bash
+nsd-checkconf -o port /etc/nsd/nsd.conf
+# Output: 53
+```
+
+Get the PID file location with full path:
+
+```bash
+nsd-checkconf -f -o pidfile /etc/nsd/nsd.conf
+# Output: /var/run/nsd/nsd.pid
+```
+
+Get the number of server processes:
+
+```bash
+nsd-checkconf -o server-count /etc/nsd/nsd.conf
+# Output: 4
+```
+
+### Query Zone Information
+
+Get the zonefile path for a zone:
+
+```bash
+nsd-checkconf -z example.com -o zonefile /etc/nsd/nsd.conf
+# Output: /var/zones/example.com.zone
+```
+
+Check if a zone has IXFR enabled:
+
+```bash
+nsd-checkconf -z example.com -o store-ixfr /etc/nsd/nsd.conf
+# Output: yes
+```
+
+### List Zones and Patterns
+
+List all configured zones:
+
+```bash
+nsd-checkconf -o zones /etc/nsd/nsd.conf
+# Output:
+# example.com
+# example.net
+# example.org
+```
+
+List all configured patterns:
+
+```bash
+nsd-checkconf -o patterns /etc/nsd/nsd.conf
+# Output:
+# primary-pattern
+# secondary-pattern
+```
+
+### Query Pattern Options
+
+Get pattern configuration:
+
+```bash
+nsd-checkconf -p secondary-pattern -o request-xfr /etc/nsd/nsd.conf
+# Output: 192.0.2.1 NOKEY
+```
+
+### Extract TSIG Key Information
+
+Get the secret for a TSIG key:
+
+```bash
+nsd-checkconf -s mykey /etc/nsd/nsd.conf
+# Output: K2tf3TRjvQkVCmJF3/Z9vA==
+```
+
+### Extract TLS Auth Information
+
+Get the authentication domain name:
+
+```bash
+nsd-checkconf -t my-tls-auth /etc/nsd/nsd.conf
+# Output: xfr.example.com
+```
+
+### Display Full Configuration
+
+Show the parsed configuration in normalized format:
+
+```bash
+nsd-checkconf -v /etc/nsd/nsd.conf
+```
+
+This outputs the entire configuration as NSD interprets it, which is useful for:
+- Seeing how `include:` directives are processed
+- Verifying pattern inheritance
+- Debugging configuration issues
+
+## Use in Shell Scripts
+
+The `-o` option makes nsd-checkconf particularly useful in shell scripts:
+
+```bash
+#!/bin/bash
+CONFIG="/etc/nsd/nsd.conf"
+
+# Get configuration values
+PORT=$(nsd-checkconf -o port "$CONFIG")
+SERVERS=$(nsd-checkconf -o server-count "$CONFIG")
+PIDFILE=$(nsd-checkconf -f -o pidfile "$CONFIG")
+
+echo "NSD is configured to run on port $PORT with $SERVERS server processes"
+echo "PID file: $PIDFILE"
+
+# Check if a zone exists
+if nsd-checkconf -o zones "$CONFIG" | grep -q "^example.com$"; then
+    ZONEFILE=$(nsd-checkconf -z example.com -o zonefile "$CONFIG")
+    echo "Zone example.com is configured with zonefile: $ZONEFILE"
+fi
+```
+
+## Exit Code
+
+The nsd-checkconf program exits with:
+- **0**: Success (no errors found)
+- **Non-zero**: Configuration errors detected
+
+## Files
+
+- Default config file: `/etc/nsd/nsd.conf` (or compile-time default)
+
+## See Also
+
+- [nsd(8)](/reference/nsd) - NSD name server daemon
+- [nsd.conf(5)](/reference/nsd-conf) - NSD configuration file format
+- [nsd-control(8)](/reference/nsd-control) - NSD remote server control utility
+
+## Authors
+
+NSD was written by NLnet Labs and RIPE NCC joint team.

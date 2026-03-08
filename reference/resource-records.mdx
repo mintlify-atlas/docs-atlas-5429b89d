@@ -1,0 +1,420 @@
+---
+title: Resource Records
+description: Complete reference of DNS resource record types supported by NSD
+---
+
+NSD supports a comprehensive set of DNS resource record (RR) types. This page documents all supported record types with syntax and examples.
+
+## Basic Record Types
+
+### A - IPv4 Address
+
+Maps a domain name to an IPv4 address.
+
+**Format:** `<name> [<ttl>] IN A <ipv4-address>`
+
+```zone
+example.com.     IN  A  192.0.2.1
+www.example.com. IN  A  192.0.2.2
+mail.example.com. IN  A  192.0.2.10
+```
+
+### AAAA - IPv6 Address  
+
+Maps a domain name to an IPv6 address.
+
+**Format:** `<name> [<ttl>] IN AAAA <ipv6-address>`
+
+```zone
+example.com.     IN  AAAA  2001:db8::1
+www.example.com. IN  AAAA  2001:db8::2
+```
+
+### NS - Name Server
+
+Delegates a DNS zone to use the specified authoritative name server.
+
+**Format:** `<name> [<ttl>] IN NS <nameserver>`
+
+```zone
+example.com.  IN  NS  ns1.example.com.
+example.com.  IN  NS  ns2.example.com.
+```
+
+### CNAME - Canonical Name
+
+Creates an alias from one name to another.
+
+**Format:** `<name> [<ttl>] IN CNAME <target>`
+
+```zone
+www.example.com.  IN  CNAME  example.com.
+ftp.example.com.  IN  CNAME  example.com.
+```
+
+<Warning>
+A CNAME record cannot coexist with other record types at the same name (except DNSSEC records like RRSIG and NSEC).
+</Warning>
+
+### PTR - Pointer
+
+Maps an IP address to a domain name (reverse DNS).
+
+**Format:** `<reverse-ip> [<ttl>] IN PTR <hostname>`
+
+```zone
+1.2.0.192.in-addr.arpa.  IN  PTR  example.com.
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa. IN PTR example.com.
+```
+
+### MX - Mail Exchange
+
+Specifies mail servers for the domain.
+
+**Format:** `<name> [<ttl>] IN MX <priority> <mailserver>`
+
+```zone
+example.com.  IN  MX  10  mail1.example.com.
+example.com.  IN  MX  20  mail2.example.com.
+example.com.  IN  MX  30  mail3.example.com.
+```
+
+Lower priority values are preferred.
+
+### TXT - Text
+
+Stores arbitrary text data, often used for SPF, DKIM, verification, etc.
+
+**Format:** `<name> [<ttl>] IN TXT <text>`
+
+```zone
+example.com.  IN  TXT  "v=spf1 mx -all"
+example.com.  IN  TXT  "google-site-verification=abc123"
+_dmarc.example.com.  IN  TXT  "v=DMARC1; p=reject; rua=mailto:dmarc@example.com"
+```
+
+Multiple strings can be specified:
+```zone
+example.com.  IN  TXT  "string 1" "string 2"
+```
+
+## Service Location
+
+### SRV - Service
+
+Specifies location of services.
+
+**Format:** `<service>.<proto>.<name> [<ttl>] IN SRV <priority> <weight> <port> <target>`
+
+```zone
+_http._tcp.example.com.    IN  SRV  10  60  80   server1.example.com.
+_http._tcp.example.com.    IN  SRV  10  40  80   server2.example.com.
+_foobar._tcp.example.com.  IN  SRV  0   1   9    old-slow-box.example.com.
+_foobar._tcp.example.com.  IN  SRV  0   3   9    new-fast-box.example.com.
+```
+
+**Fields:**
+- **Priority**: Lower values preferred (like MX)
+- **Weight**: Relative weight for same priority
+- **Port**: TCP/UDP port number
+- **Target**: Hostname providing the service
+
+### NAPTR - Naming Authority Pointer
+
+Provides rules for rewriting domain names, often used in ENUM and SIP.
+
+**Format:** `<name> [<ttl>] IN NAPTR <order> <preference> <flags> <service> <regexp> <replacement>`
+
+```zone
+example.com.  IN  NAPTR  100  10  "u"  "sip+E2U"  "!^.*$!sip:info@example.com!"  .
+```
+
+## DNSSEC Records
+
+<Tabs>
+  <Tab title="DNSKEY">
+    Public key for DNSSEC validation.
+
+    **Format:** `<name> [<ttl>] IN DNSKEY <flags> <protocol> <algorithm> <public-key>`
+
+    ```zone
+    example.com.  IN  DNSKEY  256  3  8  AwEAAa79LdJa...
+    example.com.  IN  DNSKEY  257  3  8  AwEAAZ0aqu1r...
+    ```
+
+    **Flags:**
+    - 256: Zone Signing Key (ZSK)
+    - 257: Key Signing Key (KSK)
+
+    **Algorithms:**
+    - 8: RSASHA256
+    - 13: ECDSAP256SHA256
+    - 15: ED25519
+  </Tab>
+
+  <Tab title="RRSIG">
+    Signature for a RRset.
+
+    **Format:** `<name> [<ttl>] IN RRSIG <type-covered> <algorithm> <labels> <original-ttl> <sig-expiration> <sig-inception> <key-tag> <signer> <signature>`
+
+    ```zone
+    example.com.  IN  RRSIG  A 8 2 86400 20210331231559 20210310192537 45150 example.com. lb2G4fUk...
+    ```
+  </Tab>
+
+  <Tab title="DS">
+    Delegation Signer for DNSSEC chain of trust.
+
+    **Format:** `<name> [<ttl>] IN DS <key-tag> <algorithm> <digest-type> <digest>`
+
+    ```zone
+    example.com.  IN  DS  31406  8  2  1234567890ABCDEF...
+    ```
+  </Tab>
+
+  <Tab title="NSEC">
+    Next Secure record for authenticated denial of existence.
+
+    **Format:** `<name> [<ttl>] IN NSEC <next-domain> <types>`
+
+    ```zone
+    example.com.  IN  NSEC  www.example.com. A NS SOA MX TXT AAAA RRSIG NSEC DNSKEY
+    ```
+  </Tab>
+
+  <Tab title="NSEC3">
+    Hashed authenticated denial of existence.
+
+    **Format:** `<name> [<ttl>] IN NSEC3 <algorithm> <flags> <iterations> <salt> <hash> <types>`
+
+    ```zone
+    1234ABCD.example.com.  IN  NSEC3  1  0  10  AABBCCDD  2345BCDE A RRSIG
+    ```
+  </Tab>
+
+  <Tab title="NSEC3PARAM">
+    Parameters for NSEC3 hashing.
+
+    **Format:** `<name> [<ttl>] IN NSEC3PARAM <algorithm> <flags> <iterations> <salt>`
+
+    ```zone
+    example.com.  IN  NSEC3PARAM  1  0  10  AABBCCDD
+    ```
+  </Tab>
+</Tabs>
+
+## Security and Certificates
+
+### TLSA - TLS Authentication
+
+Associates a TLS server certificate with the domain (DANE).
+
+**Format:** `<name> [<ttl>] IN TLSA <usage> <selector> <matching-type> <certificate-data>`
+
+```zone
+_443._tcp.example.com.  IN  TLSA  3  1  1  1234567890ABCDEF...
+```
+
+**Usage values:**
+- 0: CA constraint
+- 1: Service certificate constraint  
+- 2: Trust anchor assertion
+- 3: Domain-issued certificate
+
+### SSHFP - SSH Fingerprint
+
+Publishes SSH host key fingerprints.
+
+**Format:** `<name> [<ttl>] IN SSHFP <algorithm> <fp-type> <fingerprint>`
+
+```zone
+server.example.com.  IN  SSHFP  1  1  1234567890ABCDEF...
+server.example.com.  IN  SSHFP  2  1  FEDCBA0987654321...
+```
+
+**Algorithms:**
+- 1: RSA
+- 2: DSA
+- 3: ECDSA
+- 4: Ed25519
+
+### CAA - Certification Authority Authorization
+
+Specifies which CAs are allowed to issue certificates for the domain.
+
+**Format:** `<name> [<ttl>] IN CAA <flags> <tag> <value>`
+
+```zone
+example.com.  IN  CAA  0  issue "letsencrypt.org"
+example.com.  IN  CAA  0  issuewild ";"
+example.com.  IN  CAA  0  iodef "mailto:security@example.com"
+```
+
+### CERT - Certificate
+
+Stores certificates.
+
+**Format:** `<name> [<ttl>] IN CERT <type> <key-tag> <algorithm> <certificate>`
+
+```zone
+example.com.  IN  CERT  PKIX  0  0  MIIC...
+```
+
+## Modern Standards
+
+### SVCB - Service Binding
+
+Provides alternative endpoints for services with connection parameters.
+
+**Format:** `<name> [<ttl>] IN SVCB <priority> <target> <params>`
+
+```zone
+example.com.  IN  SVCB  0  example.com.
+example.com.  IN  SVCB  1  svc.example.com. alpn="h2,h3" ipv4hint=192.0.2.1
+```
+
+### HTTPS - HTTPS Binding
+
+Specialized SVCB for HTTPS.
+
+**Format:** `<name> [<ttl>] IN HTTPS <priority> <target> <params>`
+
+```zone
+example.com.  IN  HTTPS  1  . alpn="h2,h3"
+```
+
+## Legacy and Experimental
+
+<Tabs>
+  <Tab title="SOA">
+    Start of Authority (required for every zone).
+
+    ```zone
+    example.com.  IN  SOA  ns.example.com. admin.example.com. (
+        2020080302  ; Serial
+        7200        ; Refresh
+        3600        ; Retry
+        1209600     ; Expire
+        3600 )      ; Negative TTL
+    ```
+  </Tab>
+
+  <Tab title="HINFO">
+    Host information (rarely used).
+
+    ```zone
+    server.example.com.  IN  HINFO  "Intel Xeon"  "Linux"
+    ```
+  </Tab>
+
+  <Tab title="RP">
+    Responsible Person.
+
+    ```zone
+    example.com.  IN  RP  admin.example.com.  txt.example.com.
+    ```
+  </Tab>
+
+  <Tab title="LOC">
+    Geographic location.
+
+    ```zone
+    example.com.  IN  LOC  52 22 23.000 N 4 53 32.000 E 4.00m 1m 10000m 10m
+    ```
+  </Tab>
+
+  <Tab title="DNAME">
+    Delegation name (entire subtree alias).
+
+    ```zone
+    old.example.com.  IN  DNAME  new.example.com.
+    ```
+
+    <Warning>
+    No records can exist below a DNAME (RFC 2672).
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Additional Record Types
+
+### AFSDB - AFS Database
+
+```zone
+example.com.  IN  AFSDB  1  afsdb.example.com.
+```
+
+### KX - Key Exchanger
+
+```zone
+example.com.  IN  KX  10  kx.example.com.
+```
+
+### RT - Route Through
+
+```zone
+example.com.  IN  RT  10  relay.example.com.
+```
+
+### DHCID - DHCP Identifier
+
+```zone
+host.example.com.  IN  DHCID  AAIBY2/AuCccgoJbsaxcQc9TUapptP69lOjxfNuVAA2kjEA=
+```
+
+### OPENPGPKEY - OpenPGP Key
+
+```zone
+hash._openpgpkey.example.com.  IN  OPENPGPKEY  mQENBE...
+```
+
+### URI - Uniform Resource Identifier
+
+```zone
+_ftp._tcp.example.com.  IN  URI  10  1  "ftp://ftp.example.com/public"
+```
+
+### EUI48 / EUI64 - MAC Addresses
+
+```zone
+device.example.com.  IN  EUI48  01-23-45-67-89-ab
+device.example.com.  IN  EUI64  01-23-45-67-89-ab-cd-ef
+```
+
+## Special Query Types
+
+These types are used in queries but not stored in zone files:
+
+- **AXFR** (252): Zone transfer request
+- **IXFR** (251): Incremental zone transfer request  
+- **ANY** (255): Request for all records
+
+## Record Type Reference Table
+
+| Type | Number | Purpose | RFC |
+|------|--------|---------|-----|
+| A | 1 | IPv4 address | RFC 1035 |
+| NS | 2 | Name server | RFC 1035 |
+| CNAME | 5 | Canonical name | RFC 1035 |
+| SOA | 6 | Start of authority | RFC 1035 |
+| PTR | 12 | Pointer | RFC 1035 |
+| MX | 15 | Mail exchange | RFC 1035 |
+| TXT | 16 | Text | RFC 1035 |
+| AAAA | 28 | IPv6 address | RFC 3596 |
+| SRV | 33 | Service | RFC 2762 |
+| NAPTR | 35 | Naming authority pointer | RFC 2915 |
+| DS | 43 | Delegation signer | RFC 4034 |
+| SSHFP | 44 | SSH fingerprint | RFC 4255 |
+| RRSIG | 46 | DNSSEC signature | RFC 4034 |
+| NSEC | 47 | Next secure | RFC 4034 |
+| DNSKEY | 48 | DNS public key | RFC 4034 |
+| NSEC3 | 50 | Next secure v3 | RFC 5155 |
+| TLSA | 52 | TLS authentication | RFC 6698 |
+| SVCB | 64 | Service binding | RFC 9460 |
+| HTTPS | 65 | HTTPS binding | RFC 9460 |
+| CAA | 257 | Certification authority | RFC 6844 |
+
+## See Also
+
+- [Zone File Format](/reference/zonefile-format) - Zone file syntax and structure
+- [Zone Validation](/reference/zone-validation) - Validation rules and tools

@@ -1,0 +1,347 @@
+---
+title: Log Messages
+description: Common NSD log messages and their meanings
+---
+
+NSD will print log messages to the system log (or `logfile:` configuration entry). This page covers common log messages and their meanings.
+
+## Severity Levels
+
+NSD uses standard syslog severity levels:
+
+- **LOG_CRIT** - Critical errors requiring immediate attention
+- **LOG_ERR** - Error conditions
+- **LOG_WARNING** - Warning messages
+- **LOG_NOTICE** - Normal but significant conditions
+- **LOG_INFO** - Informational messages
+
+## Reload and Process Messages
+
+<Accordion title="Reload Process Failed">
+
+```log
+Reload process <pid> failed with status <s>, continuing with old database
+```
+
+**Severity:** LOG_ERR
+
+**Meaning:** This log message indicates the reload process of NSD has failed for some reason. This can be anything from a missing database file to internal errors.
+
+**Action:**
+- Check zone file syntax with `nsd-checkzone`
+- Verify file permissions on zone files and database directory
+- Check system logs for more detailed error messages
+- Review recent changes to zone files or configuration
+
+</Accordion>
+
+<Accordion title="IXFR Database Corruption">
+
+```log
+snipping off trailing partial part of <ixfr.db>
+```
+
+**Severity:** LOG_NOTICE
+
+**Meaning:** The file `ixfr.db` contains only part of expected data. The corruption is removed by snipping off the trailing part.
+
+**Action:**
+- This is automatically corrected by NSD
+- The zone will be served correctly
+- Consider investigating what caused the incomplete write (disk full, power failure, etc.)
+- IXFR history for affected zones may be incomplete
+
+</Accordion>
+
+<Accordion title="Memory Recyclebin">
+
+```log
+memory recyclebin holds <num> bytes
+```
+
+**Severity:** LOG_INFO
+
+**Meaning:** This is printed for every reload. NSD allocates and deallocates memory to service IXFR updates. The recycle bin holds deallocated memory ready for future use. If the number grows too large, a restart resets it.
+
+**Action:**
+- This is informational only
+- If the number grows very large (hundreds of MB or more), consider restarting NSD
+- Normal operation for servers with frequent zone updates
+- A restart will free this memory back to the system
+
+</Accordion>
+
+## Zone Transfer Messages
+
+<Accordion title="Max TCP Connections Reached">
+
+```log
+xfrd: max number of tcp connections (32) reached
+```
+
+**Severity:** LOG_WARNING
+
+**Meaning:** This line is printed when more than 32 zones need a zone transfer at the same time. The value is a compile constant (`xfrd-tcp.h`), but if this happens often for you, we could make this a config option. NSD will reuse existing TCP connections to the same primary (determined by IP address) to transfer up to 64k zones from that primary. Thus this error should only happen with more than 32 primaries or more than 64*32=2M zones that need to be updated at the same time.
+
+**Action:**
+- More zones have to wait until a zone transfer completes (or is aborted) before they can have a zone transfer too
+- This waiting list has no size limit
+- Consider staggering zone update times
+- Ensure primary servers are responding promptly
+- This is only a concern for very large deployments
+
+</Accordion>
+
+## DNSSEC Messages
+
+<Accordion title="Unknown NSEC3 Hash Algorithm">
+
+```log
+error: <zone> NSEC3PARAM entry <num> has unknown hash algo <number>
+```
+
+**Severity:** LOG_ERR
+
+**Meaning:** This error means that the zone has NSEC3 chain(s) with hash algorithms that are not supported by this version of NSD, and thus cannot be served by NSD. If there are also no NSECs or NSEC3 chain(s) with known hash algorithms, NSD will not be able to serve DNSSEC authenticated denials for the zone.
+
+**Action:**
+- Update NSD to a version that supports the hash algorithm
+- Re-sign the zone with a supported hash algorithm (SHA-1 is universally supported)
+- Check NSEC3PARAM records in the zone file
+- The zone will still be served, but DNSSEC validation may fail
+
+</Accordion>
+
+## Configuration Messages
+
+<Accordion title="SSL/TLS Messages">
+
+```log
+No SSL, therefore TLS is disabled
+```
+
+**Severity:** LOG_WARNING
+
+**Meaning:** NSD was compiled without OpenSSL support, so TLS (DNS over TLS) functionality is disabled.
+
+**Action:**
+- Recompile NSD with `--with-ssl` option
+- Install OpenSSL development libraries
+- TLS features will not be available
+
+---
+
+```log
+No TLS 1.3, therefore XFR-over-TLS is disabled
+```
+
+**Severity:** LOG_WARNING
+
+**Meaning:** OpenSSL version does not support TLS 1.3, required for XFR-over-TLS.
+
+**Action:**
+- Update OpenSSL to a version supporting TLS 1.3
+- Zone transfers over TLS will not be available
+- Regular zone transfers will continue to work
+
+</Accordion>
+
+<Accordion title="Interface and Port Messages">
+
+```log
+can't bind tcp socket: <error>
+```
+
+**Severity:** LOG_ERR
+
+**Meaning:** NSD cannot bind to the configured TCP socket.
+
+**Action:**
+- Check if another process is using the port
+- Verify IP address is configured on the system
+- Check firewall rules
+- Ensure NSD has permission to bind to the port (ports < 1024 require root)
+
+---
+
+```log
+protocol not supported
+```
+
+**Severity:** LOG_ERR
+
+**Meaning:** The requested protocol (usually IPv6) is not supported by the system.
+
+**Action:**
+- Use `--disable-ipv6` when compiling if IPv6 is not needed
+- Enable IPv6 support in the kernel
+- Remove IPv6 addresses from configuration if not available
+
+</Accordion>
+
+## File and Permission Messages
+
+<Accordion title="File Permission Errors">
+
+```log
+can't open <file>: <error>
+```
+
+**Severity:** LOG_ERR
+
+**Meaning:** NSD cannot open a required file.
+
+**Action:**
+- Check file exists
+- Verify file permissions
+- Check SELinux/AppArmor policies
+- Ensure directory permissions are correct
+- Verify user/group ownership
+
+</Accordion>
+
+## Query Processing Messages
+
+<Accordion title="Query Dropped Messages">
+
+```log
+query dropped: <reason>
+```
+
+**Severity:** LOG_INFO
+
+**Meaning:** A query failed sanity checks and was dropped.
+
+**Common Reasons:**
+- Malformed query packet
+- Invalid DNS message format
+- Query exceeds maximum size
+- Rate limiting triggered
+
+**Action:**
+- This is usually due to malicious or broken clients
+- Monitor the `num.dropped` statistic
+- If very high, investigate source IP addresses
+- Consider firewall rules for persistent bad actors
+
+</Accordion>
+
+## Statistics and Metrics Messages
+
+<Accordion title="Metrics Endpoint Messages">
+
+```log
+metrics operation completed, response sent
+```
+
+**Severity:** LOG_INFO (verbosity 3)
+
+**Meaning:** A metrics request was successfully processed and the response was sent.
+
+**Action:**
+- This is informational only
+- Indicates normal operation of metrics endpoint
+
+---
+
+```log
+metrics requested, but no stats enabled at compile time
+```
+
+**Severity:** LOG_NOTICE
+
+**Meaning:** Metrics were requested but NSD was compiled without statistics support.
+
+**Action:**
+- Recompile with `--enable-bind8-stats` to enable statistics
+- Metrics endpoint will return 204 No Content
+
+</Accordion>
+
+## System Resource Messages
+
+<Accordion title="Memory and Resource Limits">
+
+```log
+out of memory
+```
+
+**Severity:** LOG_CRIT
+
+**Meaning:** NSD has exhausted available memory.
+
+**Action:**
+- Increase system memory
+- Reduce number of zones
+- Enable `--disable-nsec3` if NSEC3 is not needed (saves ~20% memory)
+- Consider `--disable-radix-tree` to use less memory
+- Check for memory leaks with long uptimes
+
+</Accordion>
+
+## Verbosity Levels
+
+Control log verbosity with the `verbosity` option in nsd.conf or via `nsd-control verbosity <number>`:
+
+- **0** - Only errors and warnings
+- **1** - Operational information (default)
+- **2** - Full query logging (very verbose)
+- **3** - Debug information
+
+```yaml nsd.conf
+server:
+    verbosity: 1
+```
+
+## Log File Configuration
+
+Configure logging in nsd.conf:
+
+```yaml nsd.conf
+server:
+    # Log to file instead of syslog
+    logfile: "/var/log/nsd.log"
+    
+    # Set verbosity level
+    verbosity: 1
+    
+    # Log queries (verbosity 2 required)
+    # verbosity: 2
+```
+
+## Troubleshooting Tips
+
+<Steps>
+  <Step title="Check current log verbosity">
+    ```bash
+    nsd-control verbosity
+    ```
+  </Step>
+  
+  <Step title="Increase verbosity temporarily">
+    ```bash
+    nsd-control verbosity 2
+    ```
+  </Step>
+  
+  <Step title="View real-time logs">
+    ```bash
+    # For syslog
+    tail -f /var/log/syslog | grep nsd
+    
+    # For custom logfile
+    tail -f /var/log/nsd.log
+    ```
+  </Step>
+  
+  <Step title="Rotate logs">
+    ```bash
+    nsd-control log_reopen
+    ```
+  </Step>
+</Steps>
+
+## See Also
+
+- [Configure Options](/reference/configure-options) - Build-time configuration
+- [Statistics](/reference/statistics) - Statistics counters and their meanings

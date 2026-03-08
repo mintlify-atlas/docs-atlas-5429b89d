@@ -1,0 +1,586 @@
+---
+title: Statistics
+description: Statistics counters available in NSD
+---
+
+The `nsd-control stats` command shows a number of statistic counters. Statistics must be enabled at compile time with `--enable-bind8-stats` or `--enable-zone-stats`.
+
+## Viewing Statistics
+
+```bash
+# Display statistics and reset counters
+nsd-control stats
+
+# Display statistics without resetting counters
+nsd-control stats_noreset
+```
+
+## Server Statistics
+
+<Accordion title="Query Counters">
+
+### `num.queries`
+Total number of queries received (the tls, tcp and udp queries added up).
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_total`
+
+```bash
+num.queries=1234567
+```
+
+### `serverX.queries`
+Number of queries handled by the server process. The number of server processes is set with the config statement `server-count`.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_total{server="X"}`
+
+```bash
+server0.queries=617284
+server1.queries=617283
+```
+
+</Accordion>
+
+<Accordion title="Queries by Type">
+
+### `num.type.X`
+Number of queries with this query type.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_type_total{type="TYPE"}`
+
+**Common types:**
+- `num.type.A` - IPv4 address queries
+- `num.type.AAAA` - IPv6 address queries
+- `num.type.MX` - Mail exchange queries
+- `num.type.NS` - Name server queries
+- `num.type.SOA` - Start of authority queries
+- `num.type.TXT` - Text record queries
+- `num.type.CNAME` - Canonical name queries
+- `num.type.DNSKEY` - DNSSEC public key queries
+- `num.type.DS` - Delegation signer queries
+- `num.type.RRSIG` - DNSSEC signature queries
+- `num.type.NSEC` - DNSSEC next secure queries
+- `num.type.NSEC3` - DNSSEC next secure v3 queries
+
+```bash
+num.type.A=850000
+num.type.AAAA=250000
+num.type.MX=50000
+```
+
+</Accordion>
+
+<Accordion title="Queries by Class">
+
+### `num.class.X`
+Number of queries with this query class.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_class_total{class="CLASS"}`
+
+**Classes:**
+- `num.class.IN` - Internet class (most common)
+- `num.class.CH` - Chaos class
+- `num.class.HS` - Hesiod class
+- `num.class.ANY` - Any class
+
+```bash
+num.class.IN=1234567
+num.class.CH=123
+```
+
+</Accordion>
+
+<Accordion title="Queries by Opcode">
+
+### `num.opcode.X`
+Number of queries with this opcode.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_opcode_total{opcode="OPCODE"}`
+
+**Opcodes:**
+- `num.opcode.QUERY` - Standard query (most common)
+- `num.opcode.IQUERY` - Inverse query (obsolete)
+- `num.opcode.STATUS` - Server status request
+- `num.opcode.NOTIFY` - Zone change notification
+- `num.opcode.UPDATE` - Dynamic update
+
+```bash
+num.opcode.QUERY=1234000
+num.opcode.NOTIFY=567
+```
+
+</Accordion>
+
+<Accordion title="Answers by Return Code">
+
+### `num.rcode.X`
+Number of answers that carried this return code.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_rcode_total{rcode="RCODE"}`
+
+**Return codes:**
+- `num.rcode.NOERROR` - Successful query
+- `num.rcode.FORMERR` - Format error
+- `num.rcode.SERVFAIL` - Server failure
+- `num.rcode.NXDOMAIN` - Non-existent domain
+- `num.rcode.NOTIMP` - Not implemented
+- `num.rcode.REFUSED` - Query refused
+- `num.rcode.YXDOMAIN` - Name exists when it should not
+- `num.rcode.YXRRSET` - RR set exists when it should not
+- `num.rcode.NXRRSET` - RR set that should exist does not
+- `num.rcode.NOTAUTH` - Not authoritative
+- `num.rcode.NOTZONE` - Name not in zone
+- `num.rcode.BADVERS` - Bad EDNS version
+
+```bash
+num.rcode.NOERROR=900000
+num.rcode.NXDOMAIN=300000
+num.rcode.SERVFAIL=1234
+```
+
+</Accordion>
+
+<Accordion title="Transport Statistics">
+
+### `num.udp`
+Number of queries over UDP ip4.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_transport_total{transport="udp"}`
+
+### `num.udp6`
+Number of queries over UDP ip6.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_by_transport_total{transport="udp6"}`
+
+### `num.tcp`
+Number of connections over TCP ip4.
+
+**Type:** Counter  
+**Prometheus:** `nsd_connections_total{transport="tcp"}`
+
+### `num.tcp6`
+Number of connections over TCP ip6.
+
+**Type:** Counter  
+**Prometheus:** `nsd_connections_total{transport="tcp6"}`
+
+### `num.tls`
+Number of connections over TLS ip4. TLS queries are not part of num.tcp.
+
+**Type:** Counter  
+**Prometheus:** `nsd_connections_total{transport="tls"}`
+
+### `num.tls6`
+Number of connections over TLS ip6. TLS queries are not part of num.tcp6.
+
+**Type:** Counter  
+**Prometheus:** `nsd_connections_total{transport="tls6"}`
+
+```bash
+num.udp=900000
+num.udp6=250000
+num.tcp=50000
+num.tcp6=10000
+num.tls=5000
+num.tls6=2000
+```
+
+</Accordion>
+
+<Accordion title="EDNS Statistics">
+
+### `num.edns`
+Number of queries with EDNS OPT.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_with_edns_total`
+
+### `num.ednserr`
+Number of queries which failed EDNS parse.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_with_edns_failed_total`
+
+```bash
+num.edns=500000
+num.ednserr=123
+```
+
+</Accordion>
+
+<Accordion title="Zone Transfer Statistics">
+
+### `num.raxfr`
+Number of AXFR requests from clients (that got served with reply).
+
+**Type:** Counter  
+**Prometheus:** `nsd_xfr_requests_served_total{xfrtype="AXFR"}`
+
+### `num.rixfr`
+Number of IXFR requests from clients (that got served with reply).
+
+**Type:** Counter  
+**Prometheus:** `nsd_xfr_requests_served_total{xfrtype="IXFR"}`
+
+```bash
+num.raxfr=45
+num.rixfr=234
+```
+
+</Accordion>
+
+<Accordion title="Error and Drop Counters">
+
+### `num.dropped`
+Number of queries that were dropped because they failed sanity check.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_dropped_total`
+
+### `num.rxerr`
+Number of queries for which the receive failed.
+
+**Type:** Counter  
+**Prometheus:** `nsd_queries_rx_failed_total`
+
+### `num.txerr`
+Number of answers for which the transmit failed.
+
+**Type:** Counter  
+**Prometheus:** `nsd_answers_tx_failed_total`
+
+### `num.truncated`
+Number of answers with TC flag set.
+
+**Type:** Counter  
+**Prometheus:** `nsd_answers_truncated_total`
+
+### `num.answer_wo_aa`
+Number of answers with NOERROR rcode and without AA flag, this includes the referrals.
+
+**Type:** Counter  
+**Prometheus:** `nsd_answers_without_aa_total`
+
+```bash
+num.dropped=567
+num.rxerr=12
+num.txerr=8
+num.truncated=1234
+num.answer_wo_aa=456
+```
+
+</Accordion>
+
+## Time Statistics
+
+<Accordion title="Uptime and Elapsed Time">
+
+### `time.boot`
+Uptime in seconds since the server was started. With fractional seconds.
+
+**Type:** Counter  
+**Prometheus:** `nsd_time_up_seconds_total`
+
+```bash
+time.boot=86400.123456
+```
+
+### `time.elapsed`
+Time since the last stats report, in seconds. With fractional seconds. Can be zero if polled quickly and the previous stats command resets the counters, so that the next gets a fully zero, and zero elapsed time, report.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_time_elapsed_seconds`
+
+```bash
+time.elapsed=3600.789012
+```
+
+</Accordion>
+
+## Memory and Size Statistics
+
+<Accordion title="Database Size">
+
+### `size.db.disk`
+Size of nsd.db on disk, in bytes.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_size_db_on_disk_bytes`
+
+```bash
+size.db.disk=104857600
+```
+
+### `size.db.mem`
+Size of the DNS database in memory, in bytes.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_size_db_in_mem_bytes`
+
+```bash
+size.db.mem=134217728
+```
+
+</Accordion>
+
+<Accordion title="Process Memory">
+
+### `size.xfrd.mem`
+Size of memory for zone transfers and notifies in xfrd process, excludes TSIG data, in bytes.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_size_xfrd_in_mem_bytes`
+
+```bash
+size.xfrd.mem=2097152
+```
+
+</Accordion>
+
+<Accordion title="Configuration Size">
+
+### `size.config.disk`
+Size of zonelist file on disk, excludes the nsd.conf size, in bytes.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_size_config_on_disk_bytes`
+
+```bash
+size.config.disk=65536
+```
+
+### `size.config.mem`
+Size of config data in memory, kept twice in server and xfrd process, in bytes.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_size_config_in_mem_bytes`
+
+```bash
+size.config.mem=131072
+```
+
+</Accordion>
+
+## Zone Statistics
+
+<Accordion title="Zone Counts">
+
+### `zone.primary`
+Number of primary zones served. These are zones with no 'request-xfr:' entries. Also output as 'zone.master' for backwards compatibility.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_zones_primary`
+
+### `zone.secondary`
+Number of secondary zones served. These are zones with 'request-xfr' entries. Also output as 'zone.slave' for backwards compatibility.
+
+**Type:** Gauge  
+**Prometheus:** `nsd_zones_secondary`
+
+```bash
+zone.primary=50
+zone.secondary=25
+```
+
+</Accordion>
+
+## Per-Zone Statistics
+
+When compiled with `--enable-zone-stats`, NSD provides per-zone statistics. These follow the same format as global statistics but are prefixed with the zone name.
+
+<Accordion title="Per-Zone Counters">
+
+For each zone, the following statistics are available:
+
+- `zonestats.<zone>.queries` - Total queries for this zone
+- `zonestats.<zone>.type.X` - Queries by type
+- `zonestats.<zone>.opcode.X` - Queries by opcode
+- `zonestats.<zone>.class.X` - Queries by class
+- `zonestats.<zone>.rcode.X` - Answers by rcode
+- `zonestats.<zone>.edns` - EDNS queries
+- `zonestats.<zone>.ednserr` - EDNS errors
+- `zonestats.<zone>.udp` - UDP queries (IPv4)
+- `zonestats.<zone>.udp6` - UDP queries (IPv6)
+- `zonestats.<zone>.tcp` - TCP connections (IPv4)
+- `zonestats.<zone>.tcp6` - TCP connections (IPv6)
+- `zonestats.<zone>.tls` - TLS connections (IPv4)
+- `zonestats.<zone>.tls6` - TLS connections (IPv6)
+
+```bash
+zonestats.example.com.queries=45678
+zonestats.example.com.type.A=30000
+zonestats.example.com.type.AAAA=15000
+```
+
+**Prometheus format:**
+```
+nsd_zonestats_example_com_queries_total 45678
+nsd_zonestats_example_com_queries_by_type_total{type="A"} 30000
+nsd_zonestats_example_com_queries_by_type_total{type="AAAA"} 15000
+```
+
+</Accordion>
+
+## Prometheus Metrics
+
+When compiled with libevent 2.0 or later, NSD can expose statistics via a Prometheus-compatible HTTP endpoint.
+
+<Accordion title="Enabling Metrics Endpoint">
+
+```yaml nsd.conf
+server:
+    # Enable metrics endpoint (default: no)
+    metrics-enable: yes
+    
+    # Metrics endpoint port (default: 9100)
+    metrics-port: 9100
+    
+    # Metrics endpoint path (default: /metrics)
+    metrics-path: "/metrics"
+    
+    # Metrics interface (default: 127.0.0.1 and ::1)
+    metrics-interface: 127.0.0.1
+    metrics-interface: ::1
+```
+
+Access metrics:
+```bash
+curl http://localhost:9100/metrics
+```
+
+</Accordion>
+
+<Accordion title="Metric Naming Convention">
+
+Prometheus metrics use the following naming convention:
+
+- Prefix: `nsd_`
+- Metric name: descriptive name with underscores
+- Suffix: `_total` for counters, `_bytes` for sizes, `_seconds` for times
+- Labels: Used for dimensions (e.g., `{type="A"}`, `{server="0"}`)
+
+**Examples:**
+```prometheus
+# HELP nsd_queries_by_type_total Total number of queries received by type.
+# TYPE nsd_queries_by_type_total counter
+nsd_queries_by_type_total{type="A"} 850000
+nsd_queries_by_type_total{type="AAAA"} 250000
+
+# HELP nsd_time_up_seconds_total Uptime since server boot in seconds.
+# TYPE nsd_time_up_seconds_total counter
+nsd_time_up_seconds_total 86400.123456
+
+# HELP nsd_size_db_in_mem_bytes Size of DNS database in memory.
+# TYPE nsd_size_db_in_mem_bytes gauge
+nsd_size_db_in_mem_bytes 134217728
+```
+
+</Accordion>
+
+## Using Statistics for Monitoring
+
+<Accordion title="Monitoring Query Rates">
+
+```bash
+# Get current query rate
+nsd-control stats_noreset | grep num.queries
+
+# Monitor queries per server process
+nsd-control stats_noreset | grep server.*queries
+```
+
+**Prometheus query for QPS:**
+```promql
+rate(nsd_queries_total[5m])
+```
+
+</Accordion>
+
+<Accordion title="Monitoring Errors">
+
+```bash
+# Check error counters
+nsd-control stats_noreset | grep -E "num\.(dropped|rxerr|txerr|ednserr)"
+```
+
+**Prometheus query for error rate:**
+```promql
+rate(nsd_queries_dropped_total[5m]) +
+rate(nsd_queries_rx_failed_total[5m]) +
+rate(nsd_answers_tx_failed_total[5m])
+```
+
+</Accordion>
+
+<Accordion title="Monitoring Memory Usage">
+
+```bash
+# Check memory statistics
+nsd-control stats_noreset | grep size
+```
+
+**Prometheus query:**
+```promql
+nsd_size_db_in_mem_bytes + nsd_size_config_in_mem_bytes + nsd_size_xfrd_in_mem_bytes
+```
+
+</Accordion>
+
+<Accordion title="Monitoring Zone Transfers">
+
+```bash
+# Check zone transfer activity
+nsd-control stats_noreset | grep -E "num\.(raxfr|rixfr)"
+
+# Check zone status
+nsd-control zonestatus
+```
+
+</Accordion>
+
+## Resetting Statistics
+
+By default, `nsd-control stats` resets all counters to zero after displaying them. This allows you to measure rates over specific time periods.
+
+```bash
+# Reset counters after display
+nsd-control stats
+
+# Don't reset counters
+nsd-control stats_noreset
+```
+
+<Note>
+Time-based counters (`time.boot`, `time.elapsed`) and gauge metrics (sizes, zone counts) are not affected by resets.
+</Note>
+
+## Compilation Requirements
+
+<Warning>
+Statistics must be enabled at compile time:
+
+```bash
+# Enable basic statistics
+./configure --enable-bind8-stats
+
+# Enable per-zone statistics (includes bind8-stats)
+./configure --enable-zone-stats
+
+# Enable Prometheus metrics (requires libevent 2.0+)
+./configure --with-libevent
+```
+
+Without these flags, `nsd-control stats` will return an error.
+</Warning>
+
+## See Also
+
+- [Log Messages](/reference/log-messages) - Common log messages and meanings
+- [Configure Options](/reference/configure-options) - Build-time configuration options

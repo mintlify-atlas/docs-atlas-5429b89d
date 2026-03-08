@@ -1,0 +1,414 @@
+---
+title: Zone Management
+description: Adding, removing, and modifying zones dynamically
+---
+
+NSD allows dynamic zone management through `nsd-control`. Zones can be added, removed, or changed without editing the configuration file or restarting the server.
+
+## Overview
+
+Zone management commands work with the **zonelist file**, which stores zones added dynamically. These zones persist across restarts.
+
+<Warning>
+Zones defined directly in `nsd.conf` cannot be managed dynamically. They must be modified in the configuration file and applied with `nsd-control reconfig`.
+</Warning>
+
+## Adding Zones
+
+### addzone
+
+Add a new zone to the running server:
+
+```bash
+nsd-control addzone <zone name> <pattern name>
+```
+
+Parameters:
+- `zone name` - Fully qualified domain name (e.g., `example.com`)
+- `pattern name` - Name of an existing pattern in `nsd.conf`
+
+Example:
+```bash
+nsd-control addzone example.com secondary-pattern
+```
+
+The command:
+1. Adds the zone to the zonelist file on disk
+2. Loads the zone into memory
+3. For secondary zones: immediately attempts zone transfer
+4. For zones with zone files: reads the zone file
+
+Output:
+```
+ok
+```
+
+<Warning>
+The specified pattern must already exist in `nsd.conf`. If it doesn't exist, the command will fail with:
+```
+error pattern <name> does not exist
+```
+</Warning>
+
+### addzones
+
+Add multiple zones at once (bulk operation):
+
+```bash
+nsd-control addzones
+```
+
+Reads zone definitions from stdin, one per line:
+```
+zone1.example.com pattern1
+zone2.example.com pattern2
+zone3.example.com pattern1
+<Ctrl+D>
+```
+
+Output:
+```
+added: zone1.example.com
+added: zone2.example.com
+added: zone3.example.com
+added 3 zones
+```
+
+<Steps>
+1. Start the command:
+   ```bash
+   nsd-control addzones
+   ```
+
+2. Enter zone definitions (one per line):
+   ```
+   example.com primary-pattern
+   sub.example.com secondary-pattern
+   ```
+
+3. Press Ctrl+D to finish
+
+4. Review the results:
+   ```
+   added: example.com
+   added: sub.example.com
+   added 2 zones
+   ```
+</Steps>
+
+## Deleting Zones
+
+### delzone
+
+Remove a zone from the running server:
+
+```bash
+nsd-control delzone <zone name>
+```
+
+Example:
+```bash
+nsd-control delzone example.com
+```
+
+The command:
+1. Removes the zone from the zonelist file on disk
+2. Removes the zone from the `nsd.db` file
+3. Removes the zone from memory
+4. Leaves the zone file on disk (if it exists)
+
+<Warning>
+Zones configured inside `nsd.conf` itself cannot be removed this way. To delete such zones:
+1. Remove them from `nsd.conf`
+2. Run `nsd-control reconfig`
+</Warning>
+
+### delzones
+
+Remove multiple zones at once (bulk operation):
+
+```bash
+nsd-control delzones
+```
+
+Reads zone names from stdin, one per line:
+```
+zone1.example.com
+zone2.example.com
+zone3.example.com
+<Ctrl+D>
+```
+
+Output:
+```
+removed: zone1.example.com
+removed: zone2.example.com
+removed: zone3.example.com
+deleted 3 zones
+```
+
+## Changing Zones
+
+### changezone
+
+Change a zone to use a different pattern:
+
+```bash
+nsd-control changezone <zone name> <pattern name>
+```
+
+Example:
+```bash
+nsd-control changezone example.com new-pattern
+```
+
+This performs a seamless transition:
+1. Deletes the old zone configuration
+2. Adds the zone with the new pattern
+3. Both operations happen in one reload cycle
+4. No downtime for the zone
+
+Use cases:
+- Switch from primary to secondary (or vice versa)
+- Change notify targets
+- Update request-xfr settings
+- Modify ACLs
+
+<Warning>
+Zones configured in `nsd.conf` cannot be changed this way. Instead:
+1. Edit the pattern in `nsd.conf` (or the included file)
+2. Run `nsd-control reconfig`
+</Warning>
+
+## Zone Patterns
+
+Before adding zones, you need to define patterns in `nsd.conf`.
+
+### Primary Zone Pattern
+
+```yaml
+pattern:
+    name: "primary-pattern"
+    zonefile: "/var/nsd/zones/%s.zone"
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2 NOKEY
+    provide-xfr: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.2 NOKEY
+```
+
+Add a primary zone:
+```bash
+nsd-control addzone example.com primary-pattern
+```
+
+### Secondary Zone Pattern
+
+```yaml
+pattern:
+    name: "secondary-pattern"
+    zonefile: "/var/nsd/zones/secondary/%s.zone"
+    request-xfr: AXFR 192.0.2.53 NOKEY
+    allow-notify: 192.0.2.53 NOKEY
+```
+
+Add a secondary zone:
+```bash
+nsd-control addzone sub.example.com secondary-pattern
+```
+
+The zone transfer will start immediately.
+
+## Checking Zone Status
+
+After adding or modifying zones, check their status:
+
+```bash
+nsd-control zonestatus example.com
+```
+
+Output for a primary zone:
+```
+zone:   example.com
+state:  primary
+```
+
+Output for a secondary zone:
+```
+zone:   sub.example.com
+pattern: secondary-pattern
+state:  ok
+served-serial: "2024030801 since 2024-03-08 10:15:23"
+commit-serial: "2024030801 since 2024-03-08 10:15:23"
+```
+
+See [Zone Transfers](/operations/zone-transfers) for more details on zone status.
+
+## Working with Zonelist File
+
+The zonelist file stores dynamically added zones. Location is typically:
+- `/var/nsd/zone.list`
+- Or as configured in `nsd.conf` with `zonelist-file`
+
+Format (one zone per line):
+```
+zone_name pattern_name
+```
+
+Example:
+```
+example.com primary-pattern
+sub.example.com secondary-pattern
+test.com primary-pattern
+```
+
+<Warning>
+Do not edit the zonelist file manually while NSD is running. Use `nsd-control` commands instead.
+</Warning>
+
+## Common Workflows
+
+### Adding a New Primary Zone
+
+<Steps>
+1. Create the zone file:
+   ```bash
+   vi /var/nsd/zones/newzone.com.zone
+   ```
+
+2. Add the zone:
+   ```bash
+   nsd-control addzone newzone.com primary-pattern
+   ```
+
+3. Verify:
+   ```bash
+   nsd-control zonestatus newzone.com
+   ```
+
+4. Test:
+   ```bash
+   dig @localhost newzone.com SOA
+   ```
+</Steps>
+
+### Adding a New Secondary Zone
+
+<Steps>
+1. Add the zone:
+   ```bash
+   nsd-control addzone newsecondary.com secondary-pattern
+   ```
+
+2. Check transfer status:
+   ```bash
+   nsd-control zonestatus newsecondary.com
+   ```
+   
+   You may see:
+   ```
+   state: refreshing
+   transfer: "sent UDP to 192.0.2.53"
+   ```
+
+3. After transfer completes:
+   ```bash
+   nsd-control zonestatus newsecondary.com
+   ```
+   ```
+   state: ok
+   served-serial: "2024030801 since 2024-03-08 10:20:15"
+   ```
+</Steps>
+
+### Converting Primary to Secondary
+
+<Steps>
+1. Create a secondary pattern if needed (in `nsd.conf`)
+
+2. Change the zone:
+   ```bash
+   nsd-control changezone example.com secondary-pattern
+   ```
+
+3. Zone transfer begins immediately
+
+4. Verify:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+</Steps>
+
+### Bulk Zone Addition from File
+
+<Steps>
+1. Create a file with zone definitions:
+   ```bash
+   cat zones.txt
+   zone1.example.com pattern1
+   zone2.example.com pattern1
+   zone3.example.com pattern2
+   ```
+
+2. Add all zones:
+   ```bash
+   cat zones.txt | nsd-control addzones
+   ```
+
+3. Verify:
+   ```bash
+   nsd-control zonestatus
+   ```
+</Steps>
+
+## Catalog Zones
+
+NSD supports DNS catalog zones for automatic zone provisioning.
+
+<Warning>
+**Catalog member zones** (zones added via catalog) cannot be managed with `addzone`, `delzone`, or `changezone`. They are managed through the catalog zone itself.
+
+Attempting to delete a catalog member will produce:
+```
+Error: Zone is a catalog consumer member zone with id <member-id>
+Remove the member id from the catalog to delete this zone.
+```
+</Warning>
+
+## Error Messages
+
+### Pattern does not exist
+```
+error pattern secondary-pattern does not exist
+```
+Solution: Check available patterns in `nsd.conf` or create the pattern first.
+
+### Zone already exists
+```
+zone example.com already exists
+```
+Solution: Use `changezone` to modify the existing zone, or delete it first.
+
+### Zone defined in nsd.conf
+```
+error zone defined in nsd.conf, cannot delete it in this manner:
+remove it from nsd.conf yourself and reconfig
+```
+Solution: Edit `nsd.conf` and run `nsd-control reconfig`.
+
+### Zone not present
+```
+warning zone example.com not present
+```
+This is just a warning when trying to delete a non-existent zone.
+
+### Cannot parse zone name
+```
+error cannot parse zone name 'invalid..com'
+```
+Solution: Use a valid fully qualified domain name.
+
+## See Also
+
+- [Control Utility](/operations/control-utility) - nsd-control commands
+- [Zone Transfers](/operations/zone-transfers) - Transfer operations
+- [Configuration Reference](/reference/nsd-conf) - Pattern configuration

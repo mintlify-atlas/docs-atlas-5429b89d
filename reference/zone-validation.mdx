@@ -1,0 +1,510 @@
+---
+title: Zone Validation
+description: Validating zone files with nsd-checkzone and understanding validation rules
+---
+
+NSD includes the `nsd-checkzone` utility to validate zone files before loading them into production. This ensures zone files are syntactically correct and comply with DNS standards.
+
+## Using nsd-checkzone
+
+### Basic Usage
+
+Validate a zone file:
+
+```bash
+nsd-checkzone <zone-name> <zone-file>
+```
+
+**Example:**
+```bash
+nsd-checkzone example.com /etc/nsd/zones/example.com.zone
+```
+
+**Successful output:**
+```
+zone example.com is ok
+```
+
+**Error output:**
+```
+zone example.com file /etc/nsd/zones/example.com.zone has 3 errors
+```
+
+### Command Options
+
+#### Print Zone Contents
+
+Display the zone if validation succeeds:
+
+```bash
+nsd-checkzone -p example.com zone.file
+```
+
+This prints all resource records in the zone after successful validation.
+
+#### Create IXFR from Zone Changes
+
+Generate an incremental zone transfer (IXFR) from differences between two zone versions:
+
+```bash
+nsd-checkzone -i old.zone new-zone.file example.com new-zone.file
+```
+
+**Parameters:**
+- `-i <old-zone-file>`: Path to previous version of zone
+- Creates `<zonefile>.ixfr` with incremental changes
+- Renames existing IXFR files to `.ixfr.1`, `.ixfr.2`, etc.
+
+#### Control IXFR Storage
+
+**Limit number of IXFR versions:**
+```bash
+nsd-checkzone -n 10 -i old.zone example.com new.zone
+```
+
+Stores at most 10 IXFR versions (default: varies by configuration).
+
+**Limit IXFR size:**
+```bash
+nsd-checkzone -s 10485760 -i old.zone example.com new.zone
+```
+
+Limits IXFR storage to approximately 10 MB.
+
+### Full Command Syntax
+
+```bash
+nsd-checkzone [-p] [-i <old-zone>] [-n <ixfr-number>] [-s <ixfr-size>] \
+              <zone-name> <zone-file>
+```
+
+**Options:**
+- `-p`: Print zone if validation succeeds
+- `-i <old-zone>`: Create IXFR from old zone to new zone
+- `-n <number>`: Maximum IXFR versions to keep
+- `-s <size>`: Maximum IXFR storage size in bytes
+- `-h`: Display help information
+
+## Validation Rules
+
+NSD performs comprehensive checks during zone validation:
+
+### Required Elements
+
+<Steps>
+  <Step title="SOA Record">
+    Every zone **must** contain exactly one SOA record at the zone apex.
+
+    ```zone
+    example.com.  IN  SOA  ns.example.com. admin.example.com. (
+        2020080302 7200 3600 1209600 3600
+    )
+    ```
+
+    **Validation checks:**
+    - SOA record exists
+    - SOA is at zone apex (not subdomain)
+    - Only one SOA record per zone
+    - SOA owner matches zone name
+  </Step>
+
+  <Step title="NS Records">
+    At least one NS record must exist at the zone apex.
+
+    ```zone
+    example.com.  IN  NS  ns1.example.com.
+    ```
+
+    **Validation checks:**
+    - At least one NS record present
+    - NS records point to valid domain names
+  </Step>
+</Steps>
+
+### Domain Name Validation
+
+#### Well-formed Domain Names
+
+**Valid domain names must:**
+- Not exceed 255 octets total length
+- Have labels not exceeding 63 octets
+- Use valid characters (letters, digits, hyphens)
+- Not start or end labels with hyphens
+
+**Examples:**
+```zone
+; VALID
+example.com.               IN  A  192.0.2.1
+www.example.com.           IN  A  192.0.2.2
+my-server.example.com.     IN  A  192.0.2.3
+
+; INVALID
+-invalid.example.com.      IN  A  192.0.2.1  ; Label starts with hyphen
+invalid-.example.com.      IN  A  192.0.2.1  ; Label ends with hyphen
+```
+
+#### Out-of-Zone Data
+
+Records must be within the configured zone:
+
+```zone
+; Zone: example.com
+example.com.      IN  A  192.0.2.1   ; Valid
+www.example.com.  IN  A  192.0.2.2   ; Valid
+other.org.        IN  A  192.0.2.3   ; ERROR: out of zone
+```
+
+**Error message:**
+```
+out of zone data: example.com is outside the zone for fqdn other.org.
+```
+
+### Record Type Constraints
+
+#### CNAME Restrictions
+
+CNAME records cannot coexist with other data at the same name:
+
+```zone
+; INVALID - CNAME with other records
+www.example.com.  IN  CNAME  example.com.
+www.example.com.  IN  A      192.0.2.1      ; ERROR
+
+; VALID - CNAME alone
+www.example.com.  IN  CNAME  example.com.
+
+; VALID - DNSSEC records allowed with CNAME
+www.example.com.  IN  CNAME  example.com.
+www.example.com.  IN  RRSIG  CNAME 8 3 3600 ...
+```
+
+**Error message:**
+```
+CNAME and other data at the same name
+```
+
+#### DNAME Restrictions
+
+No records can exist below a DNAME record (RFC 2672):
+
+```zone
+; INVALID
+old.example.com.            IN  DNAME  new.example.com.
+www.old.example.com.        IN  A      192.0.2.1  ; ERROR
+
+; VALID
+old.example.com.            IN  DNAME  new.example.com.
+```
+
+**Error message:**
+```
+DNAME at old.example.com has data below it. This is not allowed (rfc 2672).
+```
+
+#### Multiple Record Restrictions
+
+**Only one record allowed:**
+- CNAME (one per name)
+- DNAME (one per name)
+- SOA (one per zone)
+
+**Error message:**
+```
+multiple CNAMEs at the same name
+multiple DNAMEs at the same name
+```
+
+### TTL Consistency
+
+All records in an RRset should have the same TTL:
+
+```zone
+; WARNING - inconsistent TTLs
+example.com.  3600  IN  A  192.0.2.1
+example.com.  7200  IN  A  192.0.2.2
+```
+
+**Warning message:**
+```
+example.com TTL 7200 does not match TTL 3600 of A RRset
+```
+
+<Note>
+This generates a warning, not an error. The zone will still load.
+</Note>
+
+### RDATA Format Validation
+
+NSD validates that rdata fields are correctly formatted for each record type:
+
+**Common validation errors:**
+
+```zone
+; Invalid IPv4 address
+example.com.  IN  A  999.999.999.999  ; ERROR
+
+; Invalid IPv6 address  
+example.com.  IN  AAAA  gggg::1       ; ERROR
+
+; Missing MX priority
+example.com.  IN  MX  mail.example.com.  ; ERROR
+
+; Invalid domain in NS
+example.com.  IN  NS  -invalid         ; ERROR
+```
+
+**Error message:**
+```
+the RR rdata fields are wrong for the type
+```
+
+### Class Validation
+
+NSD only supports the `IN` (Internet) class:
+
+```zone
+; VALID
+example.com.  IN  A  192.0.2.1
+
+; WARNING or ERROR (depending on configuration)
+example.com.  CH  A  192.0.2.1
+```
+
+**Warning message:**
+```
+only class IN is supported
+```
+
+## Duplicate Detection
+
+NSD automatically detects and removes duplicate resource records:
+
+```zone
+example.com.  IN  A  192.0.2.1
+example.com.  IN  A  192.0.2.1  ; Duplicate - silently discarded
+```
+
+Duplicates are identical in:
+- Owner name
+- Type
+- Class  
+- RDATA
+
+Duplicate TTLs are normalized to the first occurrence.
+
+## Example Validation Sessions
+
+### Valid Zone
+
+**Zone file:** `example.com.zone`
+```zone
+$ORIGIN example.com.
+$TTL 86400
+
+@  IN  SOA  ns.example.com. admin.example.com. (
+    2020080302 7200 3600 1209600 3600
+)
+
+@   IN  NS   ns1.example.com.
+@   IN  NS   ns2.example.com.
+@   IN  A    192.0.2.1
+www IN  A    192.0.2.2
+```
+
+**Validation:**
+```bash
+$ nsd-checkzone example.com example.com.zone
+zone example.com is ok
+```
+
+### Zone with Errors
+
+**Zone file:** `broken.zone`
+```zone
+$ORIGIN example.com.
+$TTL 86400
+
+; Missing SOA
+
+@  IN  NS  ns1.example.com.
+@  IN  A   192.0.2.1
+
+; Out of zone data
+other.org.  IN  A  192.0.2.10
+
+; CNAME conflict
+www  IN  CNAME  example.com.
+www  IN  A      192.0.2.2
+```
+
+**Validation:**
+```bash
+$ nsd-checkzone example.com broken.zone
+broken.zone:10: error: out of zone data: example.com is outside the zone for fqdn other.org.
+broken.zone:14: error: CNAME and other data at the same name
+broken.zone:1: error: zone configured as 'example.com' has no SOA record
+zone example.com file broken.zone has 3 errors
+```
+
+### Creating IXFR
+
+**Old zone:** `example.com.zone.old`
+```zone
+$ORIGIN example.com.
+$TTL 86400
+@  IN  SOA  ns.example.com. admin.example.com. (
+    2020080301 7200 3600 1209600 3600
+)
+@  IN  NS  ns1.example.com.
+@  IN  A   192.0.2.1
+```
+
+**New zone:** `example.com.zone`
+```zone
+$ORIGIN example.com.
+$TTL 86400
+@  IN  SOA  ns.example.com. admin.example.com. (
+    2020080302 7200 3600 1209600 3600
+)
+@  IN  NS  ns1.example.com.
+@  IN  A   192.0.2.2
+www  IN  A  192.0.2.3
+```
+
+**Create IXFR:**
+```bash
+$ nsd-checkzone -i example.com.zone.old example.com example.com.zone
+zone example.com created IXFR example.com.zone.ixfr
+zone example.com is ok
+```
+
+## Integration in Workflows
+
+### Pre-deployment Validation
+
+**Shell script example:**
+```bash
+#!/bin/bash
+ZONE_NAME="example.com"
+ZONE_FILE="/etc/nsd/zones/example.com.zone"
+
+if nsd-checkzone "$ZONE_NAME" "$ZONE_FILE" > /dev/null 2>&1; then
+    echo "Zone validation successful"
+    nsd-control reload "$ZONE_NAME"
+else
+    echo "Zone validation failed"
+    exit 1
+fi
+```
+
+### Automated Zone Updates
+
+```bash
+#!/bin/bash
+ZONE="example.com"
+OLD="/var/zones/$ZONE.old"
+NEW="/var/zones/$ZONE.new"
+LIVE="/etc/nsd/zones/$ZONE.zone"
+
+# Validate new zone
+if nsd-checkzone -i "$OLD" "$ZONE" "$NEW" > /dev/null 2>&1; then
+    # Backup current zone
+    cp "$LIVE" "$OLD"
+    # Deploy new zone
+    cp "$NEW" "$LIVE"
+    # Reload NSD
+    nsd-control reload "$ZONE"
+    echo "Zone updated successfully"
+else
+    echo "New zone failed validation"
+    exit 1
+fi
+```
+
+### CI/CD Pipeline
+
+```yaml
+# GitLab CI example
+validate-zones:
+  stage: test
+  script:
+    - nsd-checkzone example.com zones/example.com.zone
+    - nsd-checkzone example.net zones/example.net.zone
+  only:
+    - merge_requests
+
+deploy-zones:
+  stage: deploy
+  script:
+    - rsync zones/*.zone server:/etc/nsd/zones/
+    - ssh server 'nsd-control reload'
+  only:
+    - main
+```
+
+## Common Validation Errors
+
+### Missing SOA
+```
+zone configured as 'example.com' has no SOA record
+```
+**Solution:** Add SOA record at zone apex.
+
+### SOA Domain Mismatch
+```
+zone configured as 'example.com', but SOA has owner 'example.net'
+```
+**Solution:** Ensure SOA owner matches zone name.
+
+### Missing NS Records
+```
+zone configured as 'example.com' has no NS records
+```
+**Solution:** Add at least one NS record.
+
+### Malformed Domain Name
+```
+the owner cannot be converted
+```
+**Solution:** Check for invalid characters, length limits, or missing trailing dots.
+
+### Class Not Supported
+```
+only class IN is supported
+```
+**Solution:** Use `IN` class or omit (defaults to `IN`).
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Validate">
+    Run `nsd-checkzone` before deploying any zone changes to production.
+  </Step>
+
+  <Step title="Automate Validation">
+    Integrate validation into deployment scripts and CI/CD pipelines.
+  </Step>
+
+  <Step title="Increment Serial">
+    Always increment the SOA serial number when making changes.
+  </Step>
+
+  <Step title="Test with -p">
+    Use `-p` flag to review parsed zone contents after validation.
+  </Step>
+
+  <Step title="Maintain Backups">
+    Keep old zone versions for IXFR creation and rollback capability.
+  </Step>
+
+  <Step title="Monitor IXFR Size">
+    Use `-n` and `-s` options to control IXFR storage growth.
+  </Step>
+</Steps>
+
+## See Also
+
+- [Zone File Format](/reference/zonefile-format) - Zone file syntax and directives
+- [Resource Records](/reference/resource-records) - Supported RR types
+- RFC 1035 - Domain Names - Implementation and Specification
+- RFC 2136 - Dynamic Updates in the Domain Name System

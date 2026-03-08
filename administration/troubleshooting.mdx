@@ -1,0 +1,591 @@
+---
+title: Troubleshooting
+description: Diagnose and resolve common NSD issues through log analysis and debugging techniques
+---
+
+This guide helps diagnose and resolve common NSD operational issues using log analysis, debugging tools, and systematic troubleshooting approaches.
+
+## Log Files
+
+NSD logs to the system log by default, or to a custom location if configured.
+
+### Log Configuration
+
+```text
+server:
+  # Log to file instead of syslog
+  logfile: "/var/log/nsd.log"
+  
+  # Increase verbosity
+  verbosity: 2
+```
+
+**Verbosity levels:**
+- `0` - Errors and warnings only (default)
+- `1` - Operational information
+- `2` - Debug information
+- `3` - Very verbose debug output
+
+### Viewing Logs
+
+```bash
+# System log (syslog/systemd)
+sudo journalctl -u nsd -f
+
+# Traditional syslog
+sudo tail -f /var/log/syslog | grep nsd
+
+# Custom log file
+sudo tail -f /var/log/nsd.log
+```
+
+<Tip>
+Increase verbosity temporarily for debugging, but return to level 0 or 1 in production to avoid performance impact and log file growth.
+</Tip>
+
+## Common Log Messages
+
+### Reload Failures
+
+<Accordion title="Reload process <pid> failed with status <s>, continuing with old database">
+  **Meaning:** The reload process failed, and NSD continues using the previous zone data.
+
+  **Common causes:**
+  - Syntax errors in zone files
+  - Missing zone files
+  - File permission issues
+  - Corrupted database
+
+  **Diagnosis:**
+  ```bash
+  # Check zone file syntax
+  nsd-checkzone example.com /etc/nsd/example.com.zone
+  
+  # Validate configuration
+  nsd-checkconf /etc/nsd/nsd.conf
+  
+  # Check file permissions
+  ls -la /etc/nsd/*.zone
+  ```
+
+  **Solution:**
+  1. Fix syntax errors reported by `nsd-checkzone`
+  2. Ensure zone files exist and are readable by the NSD user
+  3. Verify database file isn't corrupted
+  4. Try reloading again: `nsd-control reload`
+</Accordion>
+
+### Database Corruption
+
+<Accordion title="snipping off trailing partial part of <ixfr.db>">
+  **Meaning:** The IXFR database file contains incomplete data, and NSD is removing the corrupted portion.
+
+  **Impact:** Zone transfer history may be lost, but NSD continues operating normally.
+
+  **Action required:** Usually none - NSD automatically repairs the corruption. If this message appears frequently, investigate:
+  - Disk space issues
+  - Filesystem errors
+  - Abrupt shutdowns (power loss, kill -9)
+
+  **Prevention:**
+  ```bash
+  # Ensure clean shutdowns
+  nsd-control stop
+  
+  # Check filesystem health
+  sudo fsck /dev/sdX
+  
+  # Verify disk space
+  df -h
+  ```
+</Accordion>
+
+### Memory Management
+
+<Accordion title="memory recyclebin holds <num> bytes">
+  **Meaning:** NSD reports the size of its memory recycle bin after each reload.
+
+  **Background:** NSD allocates and deallocates memory for IXFR updates. Deallocated memory is kept in a recycle bin for reuse.
+
+  **When to act:** If the number grows very large (hundreds of megabytes):
+  ```bash
+  # Restart NSD to reset the recycle bin
+  nsd-control stop
+  nsd
+  ```
+
+  **Normal behavior:** Small to moderate values are expected during regular operation.
+</Accordion>
+
+### Zone Transfer Limits
+
+<Accordion title="xfrd: max number of tcp connections (32) reached">
+  **Meaning:** More than 32 zones need simultaneous zone transfers.
+
+  **Details:**
+  - NSD allows up to 32 concurrent TCP connections for zone transfers
+  - This is a compile-time constant in `xfrd-tcp.h`
+  - NSD reuses connections to the same primary (up to 64k zones per connection)
+  
+  **When this happens:**
+  - You have more than 32 different primary servers
+  - Or more than 2 million zones needing simultaneous updates (32 × 64k)
+  
+  **Impact:** Additional zones wait in a queue until connections become available.
+
+  **Solution:** If this happens frequently:
+  1. Stagger zone updates across different times
+  2. Consolidate primaries to reduce connection count
+  3. Contact NLnet Labs about making this a configurable option
+  4. Consider modifying the source and recompiling (advanced)
+</Accordion>
+
+### NSEC3 Errors
+
+<Accordion title="error: <zone> NSEC3PARAM entry <num> has unknown hash algo <number>">
+  **Meaning:** The zone uses NSEC3 with a hash algorithm not supported by this NSD version.
+
+  **Impact:**
+  - NSD cannot serve the NSEC3 chain with the unknown algorithm
+  - If no supported NSEC/NSEC3 chains exist, DNSSEC authenticated denials will fail
+  
+  **Solutions:**
+  1. **Upgrade NSD** to a version supporting the hash algorithm
+  2. **Re-sign the zone** with a supported algorithm (typically SHA-1)
+  3. **Check primary configuration** if this is a secondary zone
+  
+  **Verification:**
+  ```bash
+  # Check NSEC3PARAM records
+  dig NSEC3PARAM example.com @localhost
+  
+  # Verify NSD version
+  nsd -v
+  ```
+</Accordion>
+
+## Startup Issues
+
+### Port Already in Use
+
+**Symptom:**
+```text
+error: can't bind socket: Address already in use
+```
+
+**Diagnosis:**
+```bash
+# Check what's using port 53
+sudo lsof -i :53
+sudo netstat -tulnp | grep :53
+
+# Check for running NSD instances
+ps aux | grep nsd
+```
+
+**Common causes:**
+- Another NSD instance is running
+- systemd-resolved is using port 53
+- BIND or another DNS server is running
+- Stale PID file after crash
+
+**Solutions:**
+
+<Accordion title="Disable systemd-resolved">
+  ```bash
+  # Disable systemd-resolved DNS stub listener
+  sudo systemctl stop systemd-resolved
+  sudo systemctl disable systemd-resolved
+  
+  # Or configure it to not bind to port 53
+  sudo mkdir -p /etc/systemd/resolved.conf.d
+  echo -e "[Resolve]\nDNSStubListener=no" | sudo tee /etc/systemd/resolved.conf.d/nsd.conf
+  sudo systemctl restart systemd-resolved
+  ```
+</Accordion>
+
+<Accordion title="Remove stale PID file">
+  ```bash
+  # Check if process exists
+  cat /var/run/nsd.pid
+  ps -p <pid>
+  
+  # If process doesn't exist, remove stale PID file
+  sudo rm /var/run/nsd.pid
+  
+  # Start NSD
+  sudo systemctl start nsd
+  ```
+</Accordion>
+
+### Permission Denied
+
+**Symptom:**
+```text
+error: can't bind socket: Permission denied
+```
+
+**Cause:** Insufficient privileges to bind to port 53 (< 1024).
+
+**Solutions:**
+
+<Accordion title="Grant capabilities (Linux)">
+  ```bash
+  # Allow NSD to bind privileged ports without running as root
+  sudo setcap CAP_NET_BIND_SERVICE=+ep /usr/sbin/nsd
+  
+  # Verify
+  getcap /usr/sbin/nsd
+  ```
+</Accordion>
+
+<Accordion title="Start as root with privilege dropping">
+  ```text
+  server:
+    username: nsd  # Drop to this user after binding
+  ```
+  
+  Start NSD as root (via systemd or init), and it will drop privileges after binding to port 53.
+</Accordion>
+
+## Zone Transfer Problems
+
+### Transfers Not Working
+
+**Diagnosis checklist:**
+
+```bash
+# 1. Check zone configuration
+nsd-checkconf /etc/nsd/nsd.conf
+
+# 2. Verify network connectivity
+ping <primary-ip>
+telnet <primary-ip> 53
+
+# 3. Test zone transfer manually
+dig @<primary-ip> example.com AXFR
+
+# 4. Check ACLs on primary server
+# Ensure your secondary IP is in provide-xfr list
+
+# 5. Verify TSIG keys match
+# Compare key name, algorithm, and secret
+
+# 6. Check logs on both servers
+sudo journalctl -u nsd -f
+```
+
+<Accordion title="TSIG verification failure">
+  **Error:** Zone transfer fails with TSIG error.
+
+  **Diagnosis:**
+  ```bash
+  # Test transfer with verbose output
+  dig @<primary-ip> example.com AXFR -y hmac-sha256:keyname:secret
+  ```
+
+  **Common issues:**
+  - Key names don't match exactly (case-sensitive)
+  - Different algorithms configured on primary vs secondary
+  - Secret is different or improperly encoded
+  - Clock skew between servers (TSIG uses timestamps)
+
+  **Solutions:**
+  ```bash
+  # Verify time synchronization
+  ntpq -p
+  timedatectl status
+  
+  # Check key configuration on both servers
+  nsd-checkconf /etc/nsd/nsd.conf
+  ```
+</Accordion>
+
+<Accordion title="Connection refused or timeout">
+  **Diagnosis:**
+  ```bash
+  # Check firewall rules
+  sudo iptables -L -n -v | grep 53
+  sudo firewall-cmd --list-all
+  
+  # Test TCP connectivity (zone transfers use TCP)
+  nc -v <primary-ip> 53
+  telnet <primary-ip> 53
+  
+  # Check primary is listening
+  # On primary server:
+  sudo netstat -tulnp | grep :53
+  ```
+
+  **Solutions:**
+  - Open TCP port 53 in firewall
+  - Verify primary server is running
+  - Check network ACLs and security groups
+  - Ensure no NAT issues between servers
+</Accordion>
+
+## Configuration Errors
+
+### Validation Tools
+
+```bash
+# Check configuration file syntax
+nsd-checkconf /etc/nsd/nsd.conf
+
+# Validate specific zone file
+nsd-checkzone example.com /etc/nsd/example.com.zone
+
+# Verbose output for debugging
+nsd-checkconf -v /etc/nsd/nsd.conf
+```
+
+**Common errors:**
+- Missing quotes around values with spaces
+- Incorrect indentation
+- Typos in option names
+- Invalid IP addresses or CIDR notation
+- Mismatched TSIG key names
+
+## Performance Issues
+
+### High CPU Usage
+
+**Diagnosis:**
+
+```bash
+# Check query rate
+nsd-control stats | grep num.queries
+
+# Monitor CPU per process
+top -p $(pgrep nsd | tr '\n' ',')
+
+# Check server processes
+ps aux | grep nsd
+```
+
+**Solutions:**
+
+<Accordion title="Increase server-count">
+  Scale server processes to match CPU cores:
+  
+  ```text
+  server:
+    server-count: 4  # Match your CPU core count
+    reuseport: yes
+  ```
+  
+  See [Performance Tuning](/administration/tuning) for details.
+</Accordion>
+
+<Accordion title="Enable query rate limiting">
+  ```text
+  server:
+    rrl-size: 1000000
+    rrl-ratelimit: 200
+    rrl-whitelist-ratelimit: 2000
+  ```
+  
+  Protects against amplification attacks and excessive query load.
+</Accordion>
+
+### Memory Issues
+
+**Check memory usage:**
+
+```bash
+# Per-process memory
+ps aux | grep nsd
+
+# Detailed memory info
+nsd-control stats | grep mem
+
+# System memory
+free -h
+```
+
+**If memory usage is excessive:**
+
+```bash
+# Restart to clear recycle bin
+nsd-control stop
+nsd
+
+# Check for very large zones
+du -sh /etc/nsd/*.zone | sort -h
+```
+
+## Debugging Techniques
+
+### Query Testing
+
+```bash
+# Test basic query
+dig @localhost example.com SOA
+
+# Test zone transfer
+dig @localhost example.com AXFR
+
+# Test DNSSEC
+dig @localhost example.com DNSKEY +dnssec
+
+# Verbose output
+dig @localhost example.com ANY +trace +dnssec
+```
+
+### Using nsd-control
+
+```bash
+# View status
+nsd-control status
+
+# Display statistics
+nsd-control stats
+nsd-control stats_noreset  # Don't reset counters
+
+# Force zone transfer
+nsd-control transfer example.com
+nsd-control force_transfer example.com
+
+# Send notifications
+nsd-control notify example.com
+
+# Write zone files to disk
+nsd-control write
+
+# Reload configuration and zones
+nsd-control reconfig
+nsd-control reload
+```
+
+### Packet Capture
+
+Capture DNS traffic for deep analysis:
+
+```bash
+# Capture all DNS traffic
+sudo tcpdump -i any -n port 53 -w /tmp/dns-capture.pcap
+
+# Capture specific zone transfer
+sudo tcpdump -i any -n "tcp port 53 and host <primary-ip>" -w /tmp/axfr.pcap
+
+# Real-time monitoring
+sudo tcpdump -i any -n port 53 -l
+```
+
+Analyze with Wireshark:
+```bash
+wireshark /tmp/dns-capture.pcap
+```
+
+### Logging Tools
+
+NSD doesn't log queries by default, but you can use external tools:
+
+<Accordion title="DNSTAP support">
+  If compiled with DNSTAP:
+  
+  ```text
+  dnstap:
+    dnstap-enable: yes
+    dnstap-socket-path: "/var/run/nsd-dnstap.sock"
+    dnstap-send-identity: yes
+    dnstap-send-version: yes
+    dnstap-log-auth-query-messages: yes
+    dnstap-log-auth-response-messages: yes
+  ```
+  
+  Analyze DNSTAP output with `dnstap-read`.
+</Accordion>
+
+<Accordion title="tcpdump for query logging">
+  ```bash
+  # Log queries in real-time
+  sudo tcpdump -i any -n -l port 53 | tee /var/log/dns-queries.log
+  
+  # Decode DNS packets
+  sudo tcpdump -i any -n -vv port 53
+  ```
+</Accordion>
+
+<Accordion title="dnsstat for statistics">
+  Use CAIDA's dnsstat tool:
+  
+  ```bash
+  # Install dnsstat
+  # https://www.caida.org/catalog/software/dnsstat/
+  
+  # Capture statistics
+  sudo dnsstat -i eth0 -o /var/log/dnsstat.log
+  ```
+</Accordion>
+
+## Getting Help
+
+### Information to Collect
+
+Before reporting issues:
+
+```bash
+# NSD version and compile options
+nsd -v
+
+# Configuration check
+nsd-checkconf /etc/nsd/nsd.conf
+
+# Recent log entries
+sudo journalctl -u nsd -n 100 --no-pager
+
+# System information
+uname -a
+lsb_release -a
+
+# Statistics
+nsd-control stats_noreset
+```
+
+### Support Resources
+
+- **Mailing list:** nsd-users@nlnetlabs.nl
+- **GitHub issues:** https://github.com/NLnetLabs/nsd/issues
+- **Documentation:** https://nsd.docs.nlnetlabs.nl/
+- **NLnet Labs:** https://www.nlnetlabs.nl/
+
+<Tip>
+**When reporting issues:**
+
+1. Include NSD version and OS details
+2. Provide relevant configuration sections (redact secrets)
+3. Include complete error messages and log entries
+4. Describe steps to reproduce the problem
+5. Mention any recent changes to configuration or system
+</Tip>
+
+## Quick Reference
+
+### Essential Commands
+
+```bash
+# Configuration validation
+nsd-checkconf /etc/nsd/nsd.conf
+nsd-checkzone example.com /etc/nsd/example.com.zone
+
+# Service management
+sudo systemctl start nsd
+sudo systemctl stop nsd
+sudo systemctl restart nsd
+sudo systemctl status nsd
+
+# Control commands
+nsd-control status
+nsd-control reload
+nsd-control reconfig
+nsd-control stats
+
+# Testing
+dig @localhost example.com SOA
+dig @localhost example.com AXFR
+
+# Monitoring
+sudo journalctl -u nsd -f
+tail -f /var/log/nsd.log
+```

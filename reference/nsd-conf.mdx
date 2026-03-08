@@ -1,0 +1,797 @@
+---
+title: nsd.conf
+description: NSD configuration file reference
+---
+
+# nsd.conf
+
+NSD configuration file format and options
+
+## Synopsis
+
+```
+nsd.conf
+```
+
+## Description
+
+This file is used to configure [nsd(8)](/reference/nsd). It specifies options for the NSD server, zone files, primaries and secondaries.
+
+### File Format
+
+The file format has attributes and values. Some attributes have attributes inside them. The notation is:
+
+```
+attribute: value
+```
+
+- Comments start with `#` and last to the end of line
+- Empty lines are ignored, as is whitespace at the beginning of a line
+- Quotes must be used for values with spaces in them, e.g., `"file name.zone"`
+- There must be whitespace between keywords
+- Attribute keywords end with a colon `:` 
+
+## Example
+
+A short example configuration:
+
+```yaml
+# Example nsd.conf file for example.com
+server:
+    server-count: 1 # use this number of cpu cores
+    username: nsd
+    logfile: /var/log/nsd.log
+    pidfile: /var/run/nsd.pid
+
+zone:
+    name: example.com
+    zonefile: /etc/nsd/example.com.zone
+
+zone:
+    # this server is the primary and 192.0.2.1 is the secondary
+    name: primaryzone.com
+    zonefile: /etc/nsd/primaryzone.com.zone
+    notify: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.1 NOKEY
+
+zone:
+    # this server is the secondary and 192.0.2.2 is the primary
+    name: secondaryzone.com
+    zonefile: /etc/nsd/secondaryzone.com.zone
+    allow-notify: 192.0.2.2 NOKEY
+    request-xfr: 192.0.2.2 NOKEY
+```
+
+## Top-Level Clauses
+
+At the top level, only these clauses are allowed:
+
+- `server:` - Global server options
+- `verify:` - Zone verification options
+- `key:` - TSIG key definitions
+- `pattern:` - Zone option patterns
+- `zone:` - Zone configurations
+- `tls-auth:` - TLS authentication for XFR-over-TLS
+- `remote-control:` - Remote control options
+- `include:` - Include external files
+
+### Include Directive
+
+Files can be included using the `include:` directive:
+
+```yaml
+include: "/etc/nsd/zones.conf"
+include: "/etc/nsd/keys/*.conf"
+```
+
+Wildcards are supported: `*`, `?`, `{}`, `[]`, and `~` (see glob(7)).
+
+## Server Options
+
+The `server:` clause contains global server options. There may only be one `server:` clause.
+
+<ParamField path="ip-address" type="string">
+  Bind to the specified IP address (IPv4, IPv6, or interface name). Can be given multiple times. Optionally include a port number with `@port`.
+  
+  ```yaml
+  server:
+      ip-address: 192.0.2.1
+      ip-address: 2001:db8::1@5353
+      ip-address: eth0
+  ```
+  
+  Additional options: `servers`, `bindtodevice`, `setfib`
+</ParamField>
+
+<ParamField path="interface" type="string">
+  Same as `ip-address` (for compatibility with unbound.conf).
+</ParamField>
+
+<ParamField path="ip-transparent" type="boolean" default="no">
+  Allows NSD to bind to non-local addresses. Useful to have NSD listen to IP addresses that are not yet added to the network interface.
+</ParamField>
+
+<ParamField path="ip-freebind" type="boolean" default="no">
+  Set the IP_FREEBIND option to bind to nonlocal addresses and interfaces that are down. Similar to `ip-transparent`.
+</ParamField>
+
+<ParamField path="reuseport" type="boolean" default="no">
+  Use the SO_REUSEPORT socket option. Improves performance when combined with `server-count` > 1. Works on Linux.
+</ParamField>
+
+<ParamField path="send-buffer-size" type="number" default="4194304">
+  Set the send buffer size for query-servicing sockets in bytes. Set to 0 to use system defaults. Default is 4m.
+</ParamField>
+
+<ParamField path="receive-buffer-size" type="number" default="1048576">
+  Set the receive buffer size for query-servicing sockets in bytes. Set to 0 to use system defaults. Default is 1m.
+</ParamField>
+
+<ParamField path="debug-mode" type="boolean" default="no">
+  Do not fork a daemon process. Same as command-line option `-d`.
+</ParamField>
+
+<ParamField path="do-ip4" type="boolean" default="yes">
+  Enable or disable IPv4 connections.
+</ParamField>
+
+<ParamField path="do-ip6" type="boolean" default="yes">
+  Enable or disable IPv6 connections.
+</ParamField>
+
+<ParamField path="database" type="string">
+  This option is ignored by NSD versions 4.8.0 and newer (database feature removed).
+</ParamField>
+
+<ParamField path="zonelistfile" type="string">
+  File used to store the dynamically added list of zones. Used by `nsd-control addzone` and `delzone` commands.
+</ParamField>
+
+<ParamField path="identity" type="string">
+  Returns the specified identity when asked for `CH TXT ID.SERVER`. Default is the name from `gethostname(3)`. Same as `-i`.
+</ParamField>
+
+<ParamField path="version" type="string">
+  Returns the specified version string when asked for `CH TXT version.server` or `version.bind` queries.
+</ParamField>
+
+<ParamField path="nsid" type="string">
+  Add the specified NSID to the EDNS section of the answer when queried with NSID EDNS enabled. Hex string or `ascii_` prefix. Same as `-I`.
+</ParamField>
+
+<ParamField path="logfile" type="string">
+  Log messages to the specified file. Default is to log to stderr and syslog. Same as `-l`.
+</ParamField>
+
+<ParamField path="log-only-syslog" type="boolean" default="no">
+  Log messages only to syslog. Useful with systemd to avoid duplicate log strings in journald.
+</ParamField>
+
+<ParamField path="server-count" type="number" default="1">
+  Start this many NSD server processes. Same as `-N`.
+</ParamField>
+
+<ParamField path="cpu-affinity" type="number">
+  Overall CPU affinity for NSD servers. Specify core numbers.
+  
+  ```yaml
+  server:
+      cpu-affinity: 0 1 2 3
+  ```
+</ParamField>
+
+<ParamField path="server-N-cpu-affinity" type="number">
+  Bind NSD server N to a specific core. Only takes effect if `cpu-affinity` is enabled.
+</ParamField>
+
+<ParamField path="xfrd-cpu-affinity" type="number">
+  Bind xfrd process to a specific core. Only takes effect if `cpu-affinity` is enabled.
+</ParamField>
+
+<ParamField path="tcp-count" type="number" default="100">
+  Maximum number of concurrent, active TCP connections per server. Same as `-n`.
+</ParamField>
+
+<ParamField path="tcp-reject-overflow" type="boolean" default="no">
+  Drop TCP connections beyond `tcp-count` immediately (accept and close).
+</ParamField>
+
+<ParamField path="tcp-query-count" type="number" default="0">
+  Maximum number of queries served on a single TCP connection. 0 means unlimited.
+</ParamField>
+
+<ParamField path="tcp-timeout" type="number" default="120">
+  TCP timeout in seconds. Also affects zone transfers over TCP.
+</ParamField>
+
+<ParamField path="tcp-mss" type="number">
+  Maximum segment size (MSS) of TCP socket. Values lower than common MSS (e.g., 1220) address path MTU problems.
+</ParamField>
+
+<ParamField path="outgoing-tcp-mss" type="number">
+  Maximum segment size (MSS) of TCP socket for outgoing XFR requests.
+</ParamField>
+
+<ParamField path="tcp-listen-queue" type="number" default="-1">
+  Set the TCP backlog for listening sockets. Default -1 selects the largest allowed value.
+</ParamField>
+
+<ParamField path="xfrd-tcp-max" type="number" default="128">
+  Number of sockets for xfrd to use for outgoing zone transfers.
+</ParamField>
+
+<ParamField path="xfrd-tcp-pipeline" type="number" default="128">
+  Number of simultaneous outgoing zone transfers possible on xfrd TCP sockets. Max 65536.
+</ParamField>
+
+<ParamField path="ipv4-edns-size" type="number" default="1232">
+  Preferred EDNS buffer size for IPv4.
+</ParamField>
+
+<ParamField path="ipv6-edns-size" type="number" default="1232">
+  Preferred EDNS buffer size for IPv6.
+</ParamField>
+
+<ParamField path="pidfile" type="string">
+  Use the specified PID file. Use `""` for no pidfile. Same as `-P`.
+</ParamField>
+
+<ParamField path="port" type="number" default="53">
+  Answer queries on the specified port. Same as `-p`.
+</ParamField>
+
+<ParamField path="statistics" type="number">
+  Produce statistics every N seconds. Same as `-s`.
+</ParamField>
+
+<ParamField path="chroot" type="string">
+  Chroot on startup to the specified directory. Use `""` to disable. Same as `-t`.
+</ParamField>
+
+<ParamField path="username" type="string">
+  Drop privileges to this username after binding. Can be `username`, `id`, or `id.gid`. Same as `-u`.
+</ParamField>
+
+<ParamField path="zonesdir" type="string">
+  Change working directory to this location before accessing zone files.
+</ParamField>
+
+<ParamField path="difffile" type="string">
+  Ignored (for NSD3 compatibility).
+</ParamField>
+
+<ParamField path="xfrdfile" type="string">
+  File to save zone transfer daemon state. Use `""` to disable.
+</ParamField>
+
+<ParamField path="xfrdir" type="string">
+  Directory where zone transfers are stored before processing.
+</ParamField>
+
+<ParamField path="xfrd-reload-timeout" type="number" default="1">
+  Wait this many seconds before triggering reload after zone transfer. -1 disables automatic reload.
+</ParamField>
+
+<ParamField path="verbosity" type="number" default="0">
+  Verbosity level for logging. Same as `-V`.
+  
+  - **0**: Warnings and errors
+  - **1**: Notifies and zone transfers
+  - **2**: Soft errors like connection resets
+</ParamField>
+
+<ParamField path="hide-version" type="boolean" default="no">
+  Prevent NSD from replying with version string on CHAOS class queries.
+</ParamField>
+
+<ParamField path="hide-identity" type="boolean" default="no">
+  Prevent NSD from replying with identity string on CHAOS class queries.
+</ParamField>
+
+<ParamField path="drop-updates" type="boolean" default="no">
+  Drop received packets with the UPDATE opcode.
+</ParamField>
+
+<ParamField path="log-time-ascii" type="boolean" default="yes">
+  Log time in ASCII format (not seconds since epoch).
+</ParamField>
+
+<ParamField path="log-time-iso" type="boolean" default="no">
+  Log time in ISO8601 format (requires `log-time-ascii: yes`).
+</ParamField>
+
+<ParamField path="round-robin" type="boolean" default="no">
+  Enable round-robin rotation of records in answers for load balancing.
+</ParamField>
+
+<ParamField path="minimal-responses" type="boolean" default="no">
+  Enable minimal responses for smaller answer packets.
+</ParamField>
+
+<ParamField path="confine-to-zone" type="boolean" default="no">
+  Don't add additional information if the apex zone doesn't match the initial query.
+</ParamField>
+
+<ParamField path="refuse-any" type="boolean" default="no">
+  Refuse queries of type ANY. Useful to stop query floods.
+</ParamField>
+
+<ParamField path="reload-config" type="boolean" default="no">
+  Reload configuration file on SIGHUP and update TSIG keys and zones.
+</ParamField>
+
+<ParamField path="zonefiles-check" type="boolean" default="yes">
+  Check mtime of zone files on start and SIGHUP.
+</ParamField>
+
+<ParamField path="zonefiles-write" type="number" default="3600">
+  Write updated secondary zones to disk every N seconds.
+</ParamField>
+
+### Rate Limiting Options
+
+<ParamField path="rrl-size" type="number" default="1000000">
+  Size of the RRL hashtable in buckets. More buckets use more memory and reduce collisions.
+</ParamField>
+
+<ParamField path="rrl-ratelimit" type="number" default="200">
+  Maximum queries per second allowed from one source. 0 disables rate limiting.
+</ParamField>
+
+<ParamField path="rrl-slip" type="number" default="2">
+  Send a truncated response for 1 in N dropped responses. 0 disables SLIP responses.
+</ParamField>
+
+<ParamField path="rrl-ipv4-prefix-length" type="number" default="24">
+  IPv4 prefix length for grouping addresses by netblock.
+</ParamField>
+
+<ParamField path="rrl-ipv6-prefix-length" type="number" default="64">
+  IPv6 prefix length for grouping addresses by netblock.
+</ParamField>
+
+<ParamField path="rrl-whitelist-ratelimit" type="number" default="2000">
+  Maximum QPS for whitelisted query types. 0 means unlimited.
+</ParamField>
+
+### DNS Cookies
+
+<ParamField path="answer-cookie" type="boolean" default="no">
+  Enable DNS Cookies (RFC 7873). Provides limited protection against DoS amplification attacks.
+</ParamField>
+
+<ParamField path="cookie-secret" type="string">
+  128-bit hex string for creating and verifying server cookies.
+</ParamField>
+
+<ParamField path="cookie-staging-secret" type="string">
+  128-bit hex string for verifying (not creating) server cookies. For rolling secrets in anycast.
+</ParamField>
+
+<ParamField path="cookie-secret-file" type="string">
+  File from which cookie secrets are read. Manipulated with `nsd-control` commands.
+</ParamField>
+
+### TLS Options
+
+<ParamField path="tls-service-key" type="string">
+  Private key file for TLS service. Enables DNS-over-TLS.
+</ParamField>
+
+<ParamField path="tls-service-pem" type="string">
+  Public certificate PEM file for TLS service.
+</ParamField>
+
+<ParamField path="tls-service-ocsp" type="string">
+  OCSP PEM file for TLS service OCSP stapling.
+</ParamField>
+
+<ParamField path="tls-port" type="number" default="853">
+  Port number for DNS-over-TLS service.
+</ParamField>
+
+<ParamField path="tls-auth-port" type="number">
+  Port number for authenticated TLS (mutual TLS for XFR-over-TLS).
+</ParamField>
+
+<ParamField path="tls-auth-xfr-only" type="boolean">
+  Allow zone transfers only on `tls-auth-port` and only to authenticated clients.
+</ParamField>
+
+<ParamField path="tls-cert-bundle" type="string">
+  Certificate bundle file for authenticating XFR-over-TLS connections.
+</ParamField>
+
+### Proxy Protocol
+
+<ParamField path="proxy-protocol-port" type="number">
+  Port number for PROXYv2 protocol service. Can be specified multiple times.
+</ParamField>
+
+### XDP (Experimental)
+
+<ParamField path="xdp-interface" type="string">
+  Interface to use XDP with. Enables AF_XDP sockets for UDP queries. (EXPERIMENTAL)
+</ParamField>
+
+<ParamField path="xdp-program-path" type="string">
+  Path to eBPF XDP program.
+</ParamField>
+
+<ParamField path="xdp-program-load" type="boolean" default="yes">
+  Whether NSD should load the XDP program.
+</ParamField>
+
+<ParamField path="xdp-bpffs-path" type="string" default="/sys/fs/bpf">
+  Path to bpffs for storing/reading xsks_map pin.
+</ParamField>
+
+<ParamField path="xdp-force-copy" type="boolean" default="no">
+  Force XDP_COPY mode instead of zero copy for AF_XDP sockets.
+</ParamField>
+
+### Metrics
+
+<ParamField path="metrics-enable" type="boolean">
+  Enable Prometheus metrics HTTP endpoint. Requires libevent2.
+</ParamField>
+
+<ParamField path="metrics-interface" type="string" default="127.0.0.1, ::1">
+  Bind to these addresses for serving metrics. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="metrics-port" type="number" default="9100">
+  Port number for HTTP metrics service.
+</ParamField>
+
+<ParamField path="metrics-path" type="string" default="/metrics">
+  HTTP path to expose metrics.
+</ParamField>
+
+## Remote Control
+
+The `remote-control:` clause configures [nsd-control](/reference/nsd-control) access.
+
+<ParamField path="control-enable" type="boolean" default="no">
+  Enable remote control.
+</ParamField>
+
+<ParamField path="control-interface" type="string" default="127.0.0.1, ::1">
+  Bind to these addresses for control requests. Can be IP address, interface name, or absolute path for Unix socket.
+</ParamField>
+
+<ParamField path="control-port" type="number" default="8952">
+  Port number for remote control service.
+</ParamField>
+
+<ParamField path="server-key-file" type="string">
+  Path to server private key for control connection.
+</ParamField>
+
+<ParamField path="server-cert-file" type="string">
+  Path to server certificate for control connection.
+</ParamField>
+
+<ParamField path="control-key-file" type="string">
+  Path to control client private key.
+</ParamField>
+
+<ParamField path="control-cert-file" type="string">
+  Path to control client certificate.
+</ParamField>
+
+## Verifier Options
+
+The `verify:` clause configures zone verification.
+
+<ParamField path="enable" type="boolean" default="no">
+  Enable zone verification.
+</ParamField>
+
+<ParamField path="port" type="number" default="5347">
+  Port for verifier queries.
+</ParamField>
+
+<ParamField path="ip-address" type="string" default="127.0.0.1, ::1">
+  Interfaces to bind for zone verification.
+</ParamField>
+
+<ParamField path="verify-zones" type="boolean">
+  Verify zones by default.
+</ParamField>
+
+<ParamField path="verifier" type="string">
+  Command to execute for zone verification. The program should exit with status 0 if zone is valid.
+  
+  Environment variables available:
+  - `VERIFY_ZONE`: Zone domain name
+  - `VERIFY_ZONE_ON_STDIN`: "yes" or "no"
+  - `VERIFY_IP_ADDRESSES`: First address for serving zones
+  - `VERIFY_PORT`: Port number
+  - `VERIFY_IPV4_ADDRESS`: First IPv4 address
+  - `VERIFY_IPV6_ADDRESS`: First IPv6 address
+</ParamField>
+
+<ParamField path="verifier-count" type="number" default="1">
+  Maximum number of concurrent verifiers.
+</ParamField>
+
+<ParamField path="verifier-feed-zone" type="boolean">
+  Feed the updated zone to verifier via stdin.
+</ParamField>
+
+<ParamField path="verifier-timeout" type="number" default="0">
+  Maximum seconds a verifier may run. 0 means unlimited.
+</ParamField>
+
+## Pattern Options
+
+The `pattern:` clause defines reusable zone option sets.
+
+<ParamField path="name" type="string" required>
+  Pattern name (case-sensitive).
+</ParamField>
+
+<ParamField path="include-pattern" type="string">
+  Include options from another pattern (must be defined earlier).
+</ParamField>
+
+Pattern can contain any zone option (see Zone Options below).
+
+## Zone Options
+
+The `zone:` clause configures individual zones.
+
+<ParamField path="name" type="string" required>
+  Zone name (apex domain). May end with `.` (FQDN notation).
+  
+  ```yaml
+  zone:
+      name: example.com
+  ```
+</ParamField>
+
+<ParamField path="zonefile" type="string">
+  File containing zone data. Can use substitution:
+  - `%s`: Zone name
+  - `%1`, `%2`, `%3`: First, second, third character of zone name
+  - `%z`: Top-level domain
+  - `%y`: Next label under TLD
+  - `%x`: Next-next label under TLD
+  
+  ```yaml
+  zone:
+      zonefile: /var/zones/%s.zone
+      zonefile: /var/zones/%1/%2/%s.zone
+  ```
+</ParamField>
+
+### Access Control Lists
+
+<ParamField path="allow-query" type="acl">
+  Allow queries from these addresses. Format: `ip-spec key-name|NOKEY|BLOCKED`
+  
+  IP spec can be:
+  - Plain IP: `192.0.2.1`
+  - Subnet: `192.0.2.0/24`
+  - Masked: `192.0.2.0&255.255.255.0`
+  - Range: `192.0.2.1-192.0.2.25`
+  
+  ```yaml
+  zone:
+      allow-query: 192.0.2.0/24 NOKEY
+      allow-query: 2001:db8::/32 mykey
+  ```
+</ParamField>
+
+<ParamField path="allow-notify" type="acl">
+  Allow NOTIFY from these primary addresses. Format: `ip-spec key-name|NOKEY|BLOCKED`
+  
+  Port can be specified: `192.0.2.1@5300`
+</ParamField>
+
+<ParamField path="request-xfr" type="acl">
+  Request zone transfers from this primary. Format: `[AXFR|UDP] ip-address key-name|NOKEY [tls-auth-name]`
+  
+  ```yaml
+  zone:
+      request-xfr: 192.0.2.1 NOKEY
+      request-xfr: AXFR 192.0.2.1@5300 mykey
+      request-xfr: 192.0.2.1 mykey my-tls-auth
+  ```
+  
+  - `AXFR`: Only use AXFR (no IXFR)
+  - `UDP`: Use UDP for IXFR (requires TSIG)
+  - `tls-auth-name`: Use XFR-over-TLS
+</ParamField>
+
+<ParamField path="allow-axfr-fallback" type="boolean" default="yes">
+  Allow fallback to AXFR if primary doesn't support IXFR.
+</ParamField>
+
+<ParamField path="size-limit-xfr" type="number" default="0">
+  XFR temporary file size limit in bytes. 0 means unlimited.
+</ParamField>
+
+<ParamField path="notify" type="acl">
+  Send NOTIFY to these secondary addresses. Format: `ip-address key-name|NOKEY`
+  
+  ```yaml
+  zone:
+      notify: 192.0.2.10 NOKEY
+      notify: 192.0.2.11@5300 mykey
+  ```
+</ParamField>
+
+<ParamField path="notify-retry" type="number">
+  Number of retries when sending notifies.
+</ParamField>
+
+<ParamField path="provide-xfr" type="acl">
+  Allow zone transfers to these secondaries. Format: `ip-spec key-name|NOKEY|BLOCKED [tls-auth-name]`
+  
+  ```yaml
+  zone:
+      provide-xfr: 192.0.2.0/24 NOKEY
+      provide-xfr: 2001:db8::1 mykey my-tls-auth
+  ```
+</ParamField>
+
+<ParamField path="outgoing-interface" type="string">
+  Use this IP address for outgoing AXFR/IXFR requests and notifies.
+  
+  ```yaml
+  zone:
+      outgoing-interface: 192.0.2.100
+      outgoing-interface: 192.0.2.100@5300
+  ```
+</ParamField>
+
+### IXFR Options
+
+<ParamField path="store-ixfr" type="boolean" default="no">
+  Store and provide IXFR contents to secondaries.
+</ParamField>
+
+<ParamField path="ixfr-number" type="number" default="5">
+  Maximum number of IXFR versions to store.
+</ParamField>
+
+<ParamField path="ixfr-size" type="number" default="1048576">
+  Maximum storage for IXFR versions in bytes. 0 means unlimited.
+</ParamField>
+
+<ParamField path="create-ixfr" type="boolean" default="no">
+  Create IXFR data when zonefile is read. Requires `store-ixfr: yes`.
+</ParamField>
+
+### Timing Options
+
+<ParamField path="max-refresh-time" type="number">
+  Limit refresh time for secondary zones (seconds).
+</ParamField>
+
+<ParamField path="min-refresh-time" type="number">
+  Minimum refresh time for secondary zones (seconds).
+</ParamField>
+
+<ParamField path="max-retry-time" type="number">
+  Maximum retry time for secondary zones (seconds).
+</ParamField>
+
+<ParamField path="min-retry-time" type="number">
+  Minimum retry time for secondary zones (seconds).
+</ParamField>
+
+<ParamField path="min-expire-time" type="string">
+  Minimum expire time. Can be seconds or "refresh+retry+1".
+</ParamField>
+
+### Other Zone Options
+
+<ParamField path="zonestats" type="string">
+  Statistics group name for this zone. Use `%s` for zone name.
+</ParamField>
+
+<ParamField path="include-pattern" type="string">
+  Include options from the named pattern (must be defined earlier).
+</ParamField>
+
+<ParamField path="rrl-whitelist" type="string">
+  Whitelist this RRL type for the zone. Types: nxdomain, error, referral, any, rrsig, wildcard, nodata, dnskey, positive, all.
+  
+  ```yaml
+  zone:
+      rrl-whitelist: nxdomain
+      rrl-whitelist: positive
+  ```
+</ParamField>
+
+<ParamField path="multi-primary-check" type="boolean" default="no">
+  Check all primaries for the latest version.
+</ParamField>
+
+<ParamField path="verify-zone" type="boolean">
+  Enable verification for this zone.
+</ParamField>
+
+<ParamField path="verifier" type="string">
+  Command to execute for verifying this zone.
+</ParamField>
+
+<ParamField path="verifier-feed-zone" type="boolean">
+  Feed updated zone to verifier via stdin.
+</ParamField>
+
+<ParamField path="verifier-timeout" type="number">
+  Seconds before verifier is terminated. 0 means no timeout.
+</ParamField>
+
+<ParamField path="catalog" type="string">
+  Set to `consumer` or `producer` for catalog zone processing.
+</ParamField>
+
+<ParamField path="catalog-member-pattern" type="string">
+  Pattern to use for catalog member zones.
+</ParamField>
+
+<ParamField path="catalog-producer-zone" type="string">
+  Catalog producer zone for this member zone.
+</ParamField>
+
+## Key Options
+
+The `key:` clause defines TSIG keys.
+
+<ParamField path="name" type="string" required>
+  Key name.
+</ParamField>
+
+<ParamField path="algorithm" type="string">
+  HMAC algorithm (e.g., hmac-sha256, hmac-sha512).
+</ParamField>
+
+<ParamField path="secret" type="string">
+  Base64-encoded secret.
+</ParamField>
+
+```yaml
+key:
+    name: "mykey"
+    algorithm: hmac-sha256
+    secret: "K2tf3TRjvQkVCmJF3/Z9vA=="
+```
+
+## TLS Auth Options
+
+The `tls-auth:` clause defines TLS authentication for XFR-over-TLS.
+
+<ParamField path="name" type="string" required>
+  TLS auth configuration name.
+</ParamField>
+
+<ParamField path="auth-domain-name" type="string">
+  Domain name for authentication (SAN or CN in certificate).
+</ParamField>
+
+<ParamField path="client-cert" type="string">
+  Path to client certificate file.
+</ParamField>
+
+<ParamField path="client-key" type="string">
+  Path to client private key file.
+</ParamField>
+
+```yaml
+tls-auth:
+    name: "my-tls-auth"
+    auth-domain-name: "xfr.example.com"
+    client-cert: "/etc/nsd/xfr-client.pem"
+    client-key: "/etc/nsd/xfr-client.key"
+```
+
+## See Also
+
+- [nsd(8)](/reference/nsd) - NSD name server daemon
+- [nsd-checkconf(8)](/reference/nsd-checkconf) - Check NSD configuration
+- [nsd-control(8)](/reference/nsd-control) - Control NSD remotely

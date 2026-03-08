@@ -1,0 +1,271 @@
+---
+title: nsd-checkzone
+description: NSD zone file syntax checker
+---
+
+# nsd-checkzone
+
+Validate DNS zone files and create IXFR differences
+
+## Synopsis
+
+```bash
+nsd-checkzone [-h] [-p] [-i oldzonefile] [-n ixfr-number] 
+              [-s ixfr-size] zonename zonefile
+```
+
+## Description
+
+**nsd-checkzone** reads a DNS zone file and checks it for syntax errors. It prints errors to stderr and exits with nonzero status on failure.
+
+This tool is used to:
+- Validate zone files before loading them into [nsd(8)](/reference/nsd)
+- Create IXFR (incremental zone transfer) data from zone file differences
+- Print parsed zone contents in normalized format
+
+## Options
+
+<ParamField path="-h" type="flag">
+  Print usage help information and exit.
+</ParamField>
+
+<ParamField path="zonename" type="string" required>
+  The name of the zone to check (e.g., "example.com").
+</ParamField>
+
+<ParamField path="zonefile" type="string" required>
+  The file to read. Use "-" to read from stdin.
+  
+  ```bash
+  nsd-checkzone example.com zones/example.com.zone
+  cat zones/example.com.zone | nsd-checkzone example.com -
+  ```
+</ParamField>
+
+<ParamField path="-p" type="flag">
+  Print the zone contents to stdout if the zone is valid. This prints the contents as parsed by NSD's formatting routines, not a literal copy of the input.
+  
+  The output format is similar to what `nsd-control write` produces.
+  
+  ```bash
+  nsd-checkzone -p example.com zones/example.com.zone > parsed.zone
+  ```
+</ParamField>
+
+<ParamField path="-i" type="string">
+  Create an IXFR from the differences between the old zone file and the new zone file.
+  
+  - The argument to `-i` is the old zone file
+  - The other zonefile argument is the new zone file
+  
+  The difference is computed by keeping one version in memory and another in a temporary file (created in the zonefile directory). The result is written to a file with the zonefile name ending in `.ixfr`. This is where NSD reads IXFRs when configured for the zone.
+  
+  Existing IXFR files are renamed to become older IXFR versions. If the output file already exists with correct contents, no new file is created.
+  
+  ```bash
+  nsd-checkzone -i zones/example.com.zone.old example.com zones/example.com.zone
+  # Creates: zones/example.com.zone.ixfr
+  ```
+</ParamField>
+
+<ParamField path="-n" type="number" default="5">
+  The number of IXFR versions to store, at most. This is the maximum number of `.ixfr` files created for the zone.
+  
+  Older IXFR versions are deleted when this number is exceeded.
+  
+  ```bash
+  nsd-checkzone -i old.zone -n 10 example.com new.zone
+  ```
+</ParamField>
+
+<ParamField path="-s" type="number" default="1048576">
+  The maximum storage in bytes to use for IXFRs.
+  
+  - If an IXFR is bigger than this size, it is not created
+  - If the sum of IXFR storage exceeds this limit, older IXFR versions are deleted
+  - Default is 1048576 bytes (1 MB)
+  
+  ```bash
+  nsd-checkzone -i old.zone -s 5242880 example.com new.zone
+  # Limit IXFR storage to 5 MB
+  ```
+</ParamField>
+
+## Examples
+
+### Basic Zone Validation
+
+Check a zone file for syntax errors:
+
+```bash
+nsd-checkzone example.com /var/zones/example.com.zone
+```
+
+If valid, no output is produced and exit code is 0. If there are errors:
+
+```
+error: /var/zones/example.com.zone:15: syntax error
+error: /var/zones/example.com.zone:23: unknown RR type 'BOGUS'
+```
+
+### Validate and Print
+
+Check a zone and print the normalized output:
+
+```bash
+nsd-checkzone -p example.com /var/zones/example.com.zone
+```
+
+Output:
+```
+example.com.    3600    IN      SOA     ns1.example.com. admin.example.com. 2024010101 3600 900 604800 86400
+example.com.    3600    IN      NS      ns1.example.com.
+example.com.    3600    IN      NS      ns2.example.com.
+example.com.    3600    IN      A       192.0.2.1
+www.example.com. 3600   IN      A       192.0.2.2
+```
+
+### Read from stdin
+
+Validate zone data from a pipeline:
+
+```bash
+cat /var/zones/example.com.zone | nsd-checkzone example.com -
+```
+
+Or generate and validate:
+
+```bash
+ldns-signzone /var/zones/example.com.zone | nsd-checkzone example.com -
+```
+
+### Create IXFR Data
+
+Generate IXFR differences between two zone versions:
+
+```bash
+# After editing the zone file
+cp /var/zones/example.com.zone /tmp/example.com.zone.old
+# ... make changes to /var/zones/example.com.zone ...
+
+nsd-checkzone -i /tmp/example.com.zone.old example.com /var/zones/example.com.zone
+```
+
+This creates `/var/zones/example.com.zone.ixfr` containing the incremental changes.
+
+### Create IXFR with Custom Limits
+
+Limit IXFR storage to 10 versions and 10 MB:
+
+```bash
+nsd-checkzone -i old.zone -n 10 -s 10485760 example.com new.zone
+```
+
+## IXFR File Management
+
+When using the `-i` option, nsd-checkzone manages IXFR files:
+
+### File Naming
+
+For a zonefile `/var/zones/example.com.zone`, IXFR files are named:
+- `/var/zones/example.com.zone.ixfr` - Latest IXFR
+- `/var/zones/example.com.zone.ixfr.1` - Previous version
+- `/var/zones/example.com.zone.ixfr.2` - Older version
+- etc.
+
+### Version Rotation
+
+When a new IXFR is created:
+1. Existing `.ixfr` is renamed to `.ixfr.1`
+2. Existing `.ixfr.1` is renamed to `.ixfr.2`
+3. And so on...
+4. Files beyond `-n` limit are deleted
+5. New IXFR is written to `.ixfr`
+
+### Size Management
+
+If total IXFR storage exceeds `-s` bytes:
+- Oldest IXFR files are deleted first
+- Deletion continues until under the size limit
+
+### Duplicate Detection
+
+If the new IXFR would be identical to the existing `.ixfr` file:
+- No new file is created
+- Existing IXFR files are not rotated
+- This prevents duplicate IXFR entries
+
+## Integration with NSD
+
+### Manual IXFR Creation
+
+Use nsd-checkzone to manually create IXFRs when NSD is not running:
+
+```bash
+# Before updating zone file
+cp /var/zones/example.com.zone /tmp/old.zone
+
+# Update zone file
+vim /var/zones/example.com.zone
+
+# Create IXFR
+nsd-checkzone -i /tmp/old.zone example.com /var/zones/example.com.zone
+
+# Reload zone in NSD
+nsd-control reload example.com
+```
+
+### Automated IXFR Creation
+
+For zones with `create-ixfr: yes` in [nsd.conf](/reference/nsd-conf), NSD automatically creates IXFRs when reading zone files. However, you can still use nsd-checkzone for manual IXFR creation when NSD is not running.
+
+## Exit Code
+
+The nsd-checkzone program exits with:
+- **0**: Success (zone is valid)
+- **Non-zero**: Zone has errors
+
+## Common Errors
+
+Typical zone file errors detected:
+
+### Syntax Errors
+
+```
+error: syntax error
+error: expected a number
+error: unrecognized RR type
+```
+
+### SOA Errors
+
+```
+error: zone has no SOA record
+error: multiple SOA records in zone
+```
+
+### Domain Name Errors
+
+```
+error: domain name exceeds 255 characters
+error: label exceeds 63 characters
+error: out of zone data
+```
+
+### Resource Record Errors
+
+```
+error: bad RDATA format
+error: IPv4 address expected
+error: IPv6 address expected
+```
+
+## See Also
+
+- [nsd(8)](/reference/nsd) - NSD name server daemon
+- [nsd-checkconf(8)](/reference/nsd-checkconf) - Check NSD configuration
+- [nsd.conf(5)](/reference/nsd-conf) - NSD configuration file format
+
+## Authors
+
+NSD was written by NLnet Labs and RIPE NCC joint team.

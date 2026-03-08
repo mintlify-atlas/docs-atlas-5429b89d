@@ -1,0 +1,244 @@
+---
+title: Running NSD
+description: Starting, stopping, and managing the NSD daemon
+---
+
+NSD is a complete implementation of an authoritative DNS nameserver. This page covers starting and stopping the daemon, command-line options, and signal handling.
+
+## Starting NSD
+
+The recommended way to start NSD is using `nsd-control`:
+
+<Steps>
+1. Start the daemon:
+   ```bash
+   nsd-control start
+   ```
+
+2. Verify it's running:
+   ```bash
+   nsd-control status
+   ```
+   Output:
+   ```
+   version: 4.x.x
+   verbosity: 0
+   ```
+</Steps>
+
+Alternatively, you can start NSD directly:
+
+```bash
+nsd -c /etc/nsd/nsd.conf
+```
+
+## Command-Line Options
+
+NSD supports the following command-line options:
+
+### Network Options
+
+- `-4` - Only listen to IPv4 connections
+- `-6` - Only listen to IPv6 connections
+- `-a ip-address[@port]` - Listen to specified IP address (can be specified multiple times)
+- `-p port` - Answer queries on specified port (default: 53)
+
+### Configuration Options
+
+- `-c configfile` - Read specified config file instead of default `/etc/nsd/nsd.conf`
+- `-d` - Do not fork, stay in the foreground (debug mode)
+- `-l logfile` - Log messages to specified file
+- `-P pidfile` - Use specified PID file instead of default
+
+### Server Options
+
+- `-N server-count` - Start specified number of server processes (default: 1)
+  - Useful on machines with multiple CPUs
+- `-n noncurrent-tcp-count` - Maximum concurrent TCP connections per server (default: 100)
+
+### Identity and NSID
+
+- `-i identity` - Return specified identity when queried for `CH TXT ID.SERVER`
+  - Default: hostname from `gethostname(3)`
+- `-I nsid` - Add specified NSID to EDNS section
+  - Can be hex characters or `ascii_` prefix with ASCII string
+
+### Security Options
+
+- `-t chrootdir` - Chroot to specified directory upon startup
+- `-u username` - Drop privileges to specified user after binding socket
+  - Format: username, id, or id.gid (e.g., `nsd`, `80`, or `80.80`)
+
+### Verbosity and Statistics
+
+- `-V level` - Set verbosity level for logging (default: 0)
+- `-s seconds` - Produce statistics dump every N seconds (equivalent to periodic SIGUSR1)
+- `-v` - Print version number and exit
+- `-h` - Print help information and exit
+
+## Daemon Mode
+
+By default, NSD runs as a daemon:
+
+- Reads configuration file
+- Forks into background
+- Binds to port 53 (or specified port)
+- Answers DNS queries
+
+To run in foreground mode (for debugging or systemd):
+
+```bash
+nsd -d
+```
+
+## Stopping NSD
+
+Use `nsd-control` to stop the daemon gracefully:
+
+```bash
+nsd-control stop
+```
+
+This sends SIGTERM to the daemon, which:
+- Stops answering queries
+- Saves state if necessary
+- Exits cleanly
+
+## Signal Handling
+
+NSD reacts to the following signals:
+
+### SIGTERM
+
+Graceful shutdown:
+- Stop answering queries
+- Shutdown all processes
+- Exit normally
+
+```bash
+kill -TERM $(cat /var/run/nsd.pid)
+```
+
+### SIGHUP
+
+Reload log file and optionally update zones:
+- Reopen log file (assists log rotation)
+- Update TSIG keys
+- Reload modified zone files
+
+```bash
+kill -HUP $(cat /var/run/nsd.pid)
+```
+
+Or use:
+```bash
+nsd-control reload
+```
+
+### SIGUSR1
+
+Dump BIND8-style statistics:
+- Writes statistics to log file
+- Only works if compiled with `--enable-bind8-stats`
+
+```bash
+kill -USR1 $(cat /var/run/nsd.pid)
+```
+
+Or use:
+```bash
+nsd-control stats
+```
+
+## Process Management
+
+### Multiple Server Processes
+
+Run multiple server processes for better performance:
+
+```bash
+nsd -N 4
+```
+
+Or in `nsd.conf`:
+```yaml
+server:
+    server-count: 4
+```
+
+<Warning>
+Multiple server processes are only useful on machines with multiple CPUs and/or network adapters.
+</Warning>
+
+### TCP Connections
+
+Limit concurrent TCP connections per server:
+
+```bash
+nsd -n 200
+```
+
+Or in `nsd.conf`:
+```yaml
+server:
+    tcp-count: 200
+```
+
+## Example Startup Commands
+
+Basic startup:
+```bash
+nsd
+```
+
+Custom config file:
+```bash
+nsd -c /usr/local/etc/nsd.conf
+```
+
+IPv4 only with custom port:
+```bash
+nsd -4 -p 5353
+```
+
+Foreground mode with verbose logging:
+```bash
+nsd -d -V 3
+```
+
+Multiple servers with specific interfaces:
+```bash
+nsd -N 4 -a 192.0.2.1 -a 192.0.2.2
+```
+
+Chroot and drop privileges:
+```bash
+nsd -t /var/nsd -u nsd
+```
+
+## Checking Server Status
+
+Check if NSD is running:
+
+```bash
+nsd-control status
+```
+
+Exit codes:
+- `0` - Server is running
+- `1` - Error occurred
+- `3` - Server is not running (connection refused)
+
+## Files
+
+Default locations:
+
+- PID file: `/var/run/nsd.pid`
+- Config file: `/etc/nsd/nsd.conf`
+- Log output: syslog daemon facility (unless `-d` or `-l` specified)
+
+## See Also
+
+- [Control Utility](/operations/control-utility) - Using nsd-control
+- [Logging](/operations/logging) - Log configuration and management
+- [Monitoring](/operations/monitoring) - Statistics and health checks

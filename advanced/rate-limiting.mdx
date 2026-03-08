@@ -1,0 +1,679 @@
+---
+title: "Response Rate Limiting"
+description: "DNS Response Rate Limiting (RRL) configuration to mitigate DDoS and amplification attacks in NSD"
+---
+
+# Response Rate Limiting
+
+Response Rate Limiting (RRL) is a technique to mitigate DNS amplification attacks and other abuse by limiting the rate of responses sent to clients. NSD implements RRL based on query source, query type, and response type.
+
+## Overview
+
+RRL protects your DNS infrastructure by:
+
+- **Limiting response rates** to prevent amplification attacks
+- **Differentiating response types** so legitimate traffic isn't blocked
+- **Using SLIP responses** to help legitimate clients while blocking attackers
+- **Tracking query sources** by subnet to identify abuse
+
+From `rrl.c:2`, NSD's RRL implementation is by W.C.A. Wijngaards, copyright NLnet Labs.
+
+<Warning>
+**RRL can affect legitimate traffic** if misconfigured. Start with permissive settings and tighten based on your traffic patterns.
+</Warning>
+
+## How RRL Works
+
+### Rate Limiting Algorithm
+
+From the source code (`rrl.c:28`), NSD uses a smoothed average rate calculation:
+
+```c
+struct rrl_bucket {
+    uint64_t source;      // Source netmask
+    uint32_t rate;        // Queries per second (2x actual)
+    uint32_t hash;        // Full hash
+    uint32_t counter;     // Queries in current second
+    int32_t stamp;        // Timestamp
+    uint16_t flags;       // Type flags
+};
+```
+
+**Smoothed rate formula**: `rate = rate/2 + counter`
+
+This means:
+- Current rate is averaged with previous rate
+- Bursty traffic is smoothed out
+- Gradual rate increases are tolerated
+
+### SLIP Mechanism
+
+When rate limit is exceeded, NSD uses "SLIP" (Send Limited Internet Packets):
+
+- **SLIP ratio of 2**: Half of responses are dropped, half get TC (truncate) flag
+- **SLIP ratio of 10**: 9/10 responses dropped, 1/10 get TC flag
+- **SLIP ratio of 0**: All responses dropped (no TC responses)
+
+TC responses tell clients to retry over TCP, which is rate-limited separately.
+
+## Configuration
+
+### Basic RRL Setup
+
+<Tabs>
+  <Tab title="Minimal">
+    ```conf
+    server:
+        # Enable RRL with defaults
+        rrl-ratelimit: 200
+    ```
+    
+    This enables:
+    - 200 queries per second per subnet
+    - SLIP ratio of 2 (50% TC responses)
+    - IPv4 /24 grouping
+    - IPv6 /64 grouping
+    - 1M bucket hash table
+  </Tab>
+  
+  <Tab title="Recommended">
+    ```conf
+    server:
+        # Main rate limit (queries per second)
+        rrl-ratelimit: 200
+        
+        # SLIP ratio: 1 in 2 get TC flag
+        rrl-slip: 2
+        
+        # Hash table size (more = less collisions)
+        rrl-size: 1000000
+        
+        # Subnet grouping
+        rrl-ipv4-prefix-length: 24
+        rrl-ipv6-prefix-length: 64
+        
+        # Whitelist rate (higher for known good)
+        rrl-whitelist-ratelimit: 2000
+    ```
+  </Tab>
+  
+  <Tab title="Aggressive">
+    ```conf
+    server:
+        # Strict rate limiting
+        rrl-ratelimit: 50
+        
+        # More aggressive SLIP (90% dropped)
+        rrl-slip: 10
+        
+        # Larger buckets (more memory, fewer collisions)
+        rrl-size: 2000000
+        
+        # Tighter subnet grouping
+        rrl-ipv4-prefix-length: 32  # Per IP
+        rrl-ipv6-prefix-length: 56  # Smaller subnet
+        
+        # Still allow whitelist traffic
+        rrl-whitelist-ratelimit: 2000
+    ```
+  </Tab>
+</Tabs>
+
+### Response Type Classification
+
+From `rrl.h:11` and `rrl.c:208`, NSD classifies responses into types:
+
+```c
+enum rrl_type {
+    rrl_type_nxdomain   = 0x01,   // Non-existent domain
+    rrl_type_error      = 0x02,   // Server error
+    rrl_type_referral   = 0x04,   // Delegation
+    rrl_type_any        = 0x08,   // ANY query
+    rrl_type_wildcard   = 0x10,   // Wildcard match
+    rrl_type_nodata     = 0x20,   // No data (empty answer)
+    rrl_type_dnskey     = 0x40,   // DNSKEY query
+    rrl_type_positive   = 0x80,   // Normal positive answer
+    rrl_type_rrsig      = 0x100,  // RRSIG query
+    rrl_type_all        = 0x1ff   // All types
+};
+```
+
+Each type is rate-limited independently to prevent one type from affecting others.
+
+## Classification Examples
+
+From `rrl.c:240`, NSD classifies queries:
+
+```c
+static uint16_t rrl_classify(query_type* query, const uint8_t** d, size_t* d_len)
+{
+    // NXDOMAIN responses
+    if(RCODE(query->packet) == RCODE_NXDOMAIN)
+        return rrl_type_nxdomain;
+    
+    // Error responses
+    if(RCODE(query->packet) != RCODE_OK)
+        return rrl_type_error;
+    
+    // Delegation
+    if(query->delegation_domain)
+        return rrl_type_referral;
+    
+    // ANY queries
+    if(query->qtype == TYPE_ANY)
+        return rrl_type_any;
+    
+    // Wildcard matches
+    if(query->wildcard_domain)
+        return rrl_type_wildcard;
+    
+    // No data in answer
+    if(ANCOUNT(query->packet) == 0)
+        return rrl_type_nodata;
+    
+    // DNSKEY queries
+    if(query->qtype == TYPE_DNSKEY)
+        return rrl_type_dnskey;
+    
+    // Normal positive
+    return rrl_type_positive;
+}
+```
+
+## Whitelisting
+
+### Zone-Level Whitelisting
+
+Whitelist specific response types for a zone:
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Whitelist positive responses (no limit)
+    rrl-whitelist: positive
+    
+    # Whitelist DNSKEY queries (for DNSSEC)
+    rrl-whitelist: dnskey
+    
+    # Whitelist multiple types
+    rrl-whitelist: positive
+    rrl-whitelist: dnskey
+    rrl-whitelist: rrsig
+```
+
+Whitelisted types use `rrl-whitelist-ratelimit` instead of `rrl-ratelimit`.
+
+### Whitelist All Zone Traffic
+
+```conf
+zone:
+    name: "trusted.example.com"
+    zonefile: "/var/nsd/zones/trusted.example.com.zone"
+    
+    # No limits on any response type
+    rrl-whitelist: all
+```
+
+### Subnet Whitelisting
+
+RRL whitelists by zone and type, not by source IP. To whitelist specific IPs:
+
+```conf
+# Use separate zone with whitelist
+zone:
+    name: "api.example.com"
+    zonefile: "/var/nsd/zones/api.example.com.zone"
+    
+    # Only allow queries from specific sources
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 192.168.0.0/16 NOKEY
+    allow-query: 0.0.0.0/0 BLOCKED
+    
+    # No rate limiting for this zone
+    rrl-whitelist: all
+```
+
+## Subnet Grouping
+
+From `rrl.c:149`, NSD groups sources by subnet:
+
+```c
+static uint64_t rrl_get_source(query_type* query, uint16_t* c2)
+{
+    // IPv4: Apply prefix length mask
+    if(family == AF_INET) {
+        return query->client_addr.sin_addr.s_addr & 
+               htonl(0xffffffff << (32-rrl_ipv4_prefixlen));
+    }
+    // IPv6: Apply prefix length mask (max 64 bits)
+    else {
+        return s & rrl_ipv6_mask;
+    }
+}
+```
+
+### IPv4 Prefix Length
+
+```conf
+server:
+    # Group by /24 (256 addresses)
+    rrl-ipv4-prefix-length: 24
+    
+    # Or group by /32 (individual IPs)
+    # rrl-ipv4-prefix-length: 32
+    
+    # Or group by /16 (65,536 addresses)
+    # rrl-ipv4-prefix-length: 16
+```
+
+**Choosing prefix length**:
+- **/32**: Individual IP tracking (most precise, most memory)
+- **/24**: Typical subnet (good balance)
+- **/16**: Large network grouping (less precise)
+
+### IPv6 Prefix Length
+
+```conf
+server:
+    # Group by /64 (typical IPv6 subnet)
+    rrl-ipv6-prefix-length: 64
+    
+    # Or group by /56 (smaller grouping)
+    # rrl-ipv6-prefix-length: 56
+    
+    # Or group by /48 (typical site allocation)
+    # rrl-ipv6-prefix-length: 48
+```
+
+<Note>
+**IPv6 prefix is capped at 64 bits** in the implementation. Values larger than 64 are treated as 64.
+</Note>
+
+## Memory Usage
+
+From `rrl.h:30` and `rrl.c:47`:
+
+```c
+#define RRL_BUCKETS 1000000  // Default bucket count
+
+struct rrl_bucket {  // ~24 bytes per bucket
+    uint64_t source;   // 8 bytes
+    uint32_t rate;     // 4 bytes
+    uint32_t hash;     // 4 bytes
+    uint32_t counter;  // 4 bytes
+    int32_t stamp;     // 4 bytes
+    uint16_t flags;    // 2 bytes
+};
+```
+
+**Memory calculation**:
+- **1,000,000 buckets** × 24 bytes = **24 MB**
+- **2,000,000 buckets** × 24 bytes = **48 MB**
+- **10,000,000 buckets** × 24 bytes = **240 MB**
+
+From the documentation:
+
+> To save memory, this can be lowered, set it lower together with some other settings to have reduced memory footprint for NSD. xfrd-tcp-max: 32 and xfrd-tcp-pipeline: 128 and rrl-size: 1000
+
+Tiny memory footprint: `rrl-size: 1000` = ~24 KB
+
+## Rate Limit Calculation
+
+From `rrl.c:381`, rate calculation:
+
+```c
+uint32_t rrl_update(query_type* query, uint32_t hash, uint64_t source,
+    uint16_t flags, int32_t now, uint32_t lm)
+{
+    struct rrl_bucket* b = &rrl_array[hash % rrl_array_size];
+    
+    // Time just stepped one second
+    if(now - b->stamp == 1) {
+        b->rate = b->rate/2 + b->counter;  // Smoothed average
+        b->counter = 1;
+        b->stamp = now;
+    }
+    
+    // Return projected rate
+    if(b->counter > b->rate/2)
+        return b->counter + b->rate/2;
+    return b->rate;
+}
+```
+
+**Rate is stored as 2x actual QPS** to avoid floating point:
+- `rrl-ratelimit: 200` means 200 QPS
+- Stored internally as 400
+- Allows half-query precision
+
+## Monitoring and Logging
+
+### Enable RRL Logging
+
+```conf
+server:
+    # Verbosity 2 logs blocks and unblocks
+    verbosity: 2
+    
+    rrl-ratelimit: 200
+    rrl-slip: 2
+```
+
+From `rrl.c:352`, log messages:
+
+```c
+static void rrl_msg(query_type* query, const char* str)
+{
+    log_msg(LOG_INFO, "ratelimit %s %s type %s%s target %s query %s %s",
+        str,                        // "block" or "unblock"
+        d?wiredname2str(d):"",     // Domain name
+        rrltype2str(c),             // Response type
+        wl?"(whitelisted)":"",     // Whitelist status
+        rrlsource2str(s, c2),       // Source subnet
+        address,                    // Client IP
+        rrtype_to_string(query->qtype));  // Query type
+}
+```
+
+### Example Log Output
+
+```
+[2024-03-08 10:15:23] nsd[1234]: ratelimit block example.com type nxdomain target 192.0.2.0/24 query 192.0.2.100 A
+[2024-03-08 10:16:30] nsd[1234]: ratelimit unblock example.com type nxdomain target 192.0.2.0/24 query 192.0.2.100 A
+[2024-03-08 10:20:15] nsd[1234]: ratelimit block ~ type any target 203.0.113.0/24 query 203.0.113.50 ANY (bucket collision)
+```
+
+### Monitoring Rate Limited Clients
+
+```bash
+# Watch for rate limit messages in logs
+journalctl -u nsd -f | grep ratelimit
+
+# Count blocks in last hour
+journalctl -u nsd --since "1 hour ago" | grep "ratelimit block" | wc -l
+
+# Find most blocked subnets
+journalctl -u nsd --since "1 day ago" | \
+    grep "ratelimit block" | \
+    awk '{print $10}' | \
+    sort | uniq -c | sort -rn | head -20
+```
+
+### Statistics
+
+NSD doesn't expose RRL-specific statistics via `nsd-control stats`, but dropped queries show in:
+
+```bash
+nsd-control stats | grep dropped
+# dropped: Number of queries dropped (includes RRL)
+```
+
+## Performance Considerations
+
+### Hash Table Collisions
+
+From `rrl.c:391`, hash collisions cause bucket reuse:
+
+```c
+if(b->source != source || b->flags != flags || b->hash != hash) {
+    // Different source - reset bucket
+    if(used_to_block(b->rate, b->counter, rrl_ratelimit)) {
+        log_msg(LOG_INFO, "ratelimit unblock ~ type %s target %s "
+                "(%s collision)",
+                rrltype2str(b->flags), rrlsource2str(b->source, b->flags),
+                (b->hash!=hash?"bucket":"hash"));
+    }
+    b->hash = hash;
+    b->source = source;
+    b->flags = flags;
+    b->counter = 1;
+    b->rate = 0;
+}
+```
+
+More buckets = fewer collisions:
+
+| Bucket Count | Memory | Collision Rate |
+|--------------|--------|----------------|
+| 10,000 | 240 KB | High |
+| 100,000 | 2.4 MB | Medium |
+| 1,000,000 | 24 MB | Low |
+| 10,000,000 | 240 MB | Very Low |
+
+### CPU Impact
+
+RRL processing is lightweight:
+
+```c
+// Hash calculation using lookup3
+*hash = hashlittle(buf, sizeof(*source)+sizeof(c)+dname_len, r);
+
+// Bucket lookup: O(1)
+struct rrl_bucket* b = &rrl_array[hash % rrl_array_size];
+
+// Rate update: Simple arithmetic
+b->rate = b->rate/2 + b->counter;
+```
+
+**CPU overhead**: < 1% for typical loads
+
+### Recommended Settings by Load
+
+<Tabs>
+  <Tab title="Low Traffic">
+    ```conf
+    server:
+        # < 10,000 QPS
+        rrl-ratelimit: 200
+        rrl-slip: 2
+        rrl-size: 100000  # Save memory
+        rrl-whitelist-ratelimit: 2000
+    ```
+  </Tab>
+  
+  <Tab title="Medium Traffic">
+    ```conf
+    server:
+        # 10,000 - 100,000 QPS
+        rrl-ratelimit: 200
+        rrl-slip: 2
+        rrl-size: 1000000  # Default
+        rrl-whitelist-ratelimit: 2000
+    ```
+  </Tab>
+  
+  <Tab title="High Traffic">
+    ```conf
+    server:
+        # > 100,000 QPS
+        rrl-ratelimit: 200
+        rrl-slip: 2
+        rrl-size: 10000000  # More buckets
+        rrl-ipv4-prefix-length: 32  # Per-IP tracking
+        rrl-whitelist-ratelimit: 5000
+    ```
+  </Tab>
+</Tabs>
+
+## Tuning and Testing
+
+### Find Optimal Rate Limit
+
+<Steps>
+
+### Start Permissive
+
+```conf
+server:
+    # High limit to establish baseline
+    rrl-ratelimit: 1000
+    rrl-slip: 2
+    verbosity: 2
+```
+
+### Monitor Traffic
+
+```bash
+# Watch logs for rate limit events
+journalctl -u nsd -f | grep ratelimit
+
+# Measure normal query rate per subnet
+nsd-control stats | grep num.udp
+```
+
+### Gradually Reduce
+
+```conf
+server:
+    # Lower limit incrementally
+    rrl-ratelimit: 500
+    # Then 300
+    # Then 200
+    # Monitor for impact
+```
+
+### Adjust Based on Blocks
+
+If seeing legitimate traffic blocked:
+- Increase `rrl-ratelimit`
+- Whitelist specific zones or types
+- Adjust subnet grouping
+
+</Steps>
+
+### Testing RRL
+
+```bash
+# Generate load to test RRL
+# Use dnsperf or queryperf
+
+# Simple test with dig in loop
+for i in {1..300}; do
+    dig @localhost test$i.example.com +short &
+done
+wait
+
+# Check logs for rate limiting
+journalctl -u nsd | grep "ratelimit block"
+```
+
+## Troubleshooting
+
+<Accordion title="Legitimate Clients Blocked">
+  **Symptom**: Clients behind NAT or proxy being rate limited
+
+  **Cause**: Multiple clients share the same subnet and hit combined limit
+
+  **Solutions**:
+  ```conf
+  server:
+      # Increase rate limit
+      rrl-ratelimit: 500
+      
+      # Or use smaller subnet grouping
+      rrl-ipv4-prefix-length: 32  # Per IP
+      
+      # Or whitelist the zone
+  zone:
+      name: "example.com"
+      zonefile: "/var/nsd/zones/example.com.zone"
+      rrl-whitelist: positive
+  ```
+</Accordion>
+
+<Accordion title="RRL Not Blocking Attacks">
+  **Symptom**: Attack continues despite RRL enabled
+
+  **Diagnosis**:
+  ```bash
+  # Verify RRL is active
+  nsd-checkconf | grep rrl
+  
+  # Check verbosity
+  journalctl -u nsd | grep ratelimit
+  ```
+
+  **Causes & Solutions**:
+  - Rate limit too high: Lower `rrl-ratelimit`
+  - Attacker using many IPs: Reduce `rrl-ipv4-prefix-length`
+  - Attack type not limited: Check which type and don't whitelist it
+  - SLIP too generous: Lower `rrl-slip` (e.g., to 10 or 0)
+</Accordion>
+
+<Accordion title="High CPU from RRL">
+  **Symptom**: CPU usage increases with RRL enabled
+
+  **Unlikely**: RRL has minimal CPU impact
+
+  **Check**:
+  ```bash
+  # Profile NSD
+  perf top -p $(pidof nsd)
+  ```
+  
+  If RRL is the issue (unlikely):
+  ```conf
+  server:
+      # Reduce bucket count (more collisions, less memory)
+      rrl-size: 100000
+  ```
+</Accordion>
+
+## Security Considerations
+
+<Warning>
+**RRL Limitations**:
+
+1. **Not a complete DoS solution**: Use with firewalls, Anycast, and upstream filtering
+2. **Can impact legitimate traffic**: Monitor and tune carefully
+3. **Memory consumption**: Large `rrl-size` uses significant memory
+4. **Subnet grouping tradeoff**: Smaller subnets = more precision but more buckets needed
+</Warning>
+
+### Defense in Depth
+
+Combine RRL with other protections:
+
+```conf
+server:
+    # RRL for amplification attacks
+    rrl-ratelimit: 200
+    rrl-slip: 2
+    
+    # Block ANY queries entirely
+    refuse-any: yes
+    
+    # Limit TCP connections
+    tcp-count: 100
+    tcp-timeout: 120
+    
+    # Minimal responses to reduce amplification
+    minimal-responses: yes
+```
+
+### Whitelisting Considerations
+
+Be careful with whitelisting:
+
+```conf
+# DON'T whitelist amplification-prone types globally
+# zone:
+#     rrl-whitelist: any      # Bad - ANY queries are amplification risk
+#     rrl-whitelist: referral # Bad - Can be large responses
+
+# DO whitelist legitimate high-volume zones
+zone:
+    name: "api.example.com"
+    zonefile: "/var/nsd/zones/api.example.com.zone"
+    rrl-whitelist: positive  # OK - Controlled responses
+    rrl-whitelist: dnskey    # OK - DNSSEC queries
+```
+
+## Related Topics
+
+- [DNSSEC Configuration](/advanced/dnssec) - DNSSEC can increase response sizes
+- [XDP Support](/advanced/xdp) - RRL not available via XDP path
+- [Performance Tuning](/administration/tuning) - Optimizing NSD
+- [Security Best Practices](/administration/security) - Complete security setup

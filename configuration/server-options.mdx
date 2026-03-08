@@ -1,0 +1,534 @@
+---
+title: Server Options
+description: Global NSD server configuration options
+---
+
+# Server Options
+
+The `server:` section contains global options for the NSD server. There may only be one `server:` clause in the configuration file.
+
+## Network Configuration
+
+### Listening Addresses
+
+<ParamField path="ip-address" type="<ip4 or ip6 or interface-name>[@port] [servers] [bindtodevice] [setfib]">
+NSD will bind to the listed IP address. Can be given multiple times to bind multiple addresses. If none are given, NSD listens to the wildcard interface (0.0.0.0 and ::0).
+
+```conf
+server:
+    ip-address: 192.0.2.1
+    ip-address: 192.0.2.1@5353
+    ip-address: 2001:db8::1
+    ip-address: 192.0.2.2 servers="1-2"
+    ip-address: 192.0.2.3 bindtodevice setfib
+```
+
+**Port specification**: Optionally specify a port with `@port`
+
+**Server assignment**: Limit which server processes handle the address:
+- `servers="1-3"` - Servers 1, 2, and 3
+- `servers="1 3 5"` - Servers 1, 3, and 5
+- By default, all servers handle all addresses
+
+**Interface names**: Can use interface name instead of IP address. NSD will resolve all IP addresses associated with that interface at startup.
+
+**bindtodevice**: Uses `SO_BINDTODEVICE` to bind socket directly to network device (performance optimization)
+
+**setfib**: Uses `SO_SETFIB` to associate routing table from the interface (FreeBSD, performance optimization)
+</ParamField>
+
+<ParamField path="interface" type="string">
+Same as `ip-address` (for compatibility with unbound.conf).
+</ParamField>
+
+<ParamField path="ip-transparent" type="yes or no" default="no">
+Allows NSD to bind to non-local addresses. Useful to answer immediately when an address is added to the network interface.
+
+```conf
+server:
+    ip-transparent: yes
+```
+</ParamField>
+
+<ParamField path="ip-freebind" type="yes or no" default="no">
+Set the `IP_FREEBIND` option to bind to nonlocal addresses and interfaces that are down. Similar to `ip-transparent`.
+</ParamField>
+
+<ParamField path="port" type="number" default="53">
+Port number to answer queries on.
+
+```conf
+server:
+    port: 5353
+```
+</ParamField>
+
+<ParamField path="do-ip4" type="yes or no" default="yes">
+If yes, NSD listens to IPv4 connections.
+</ParamField>
+
+<ParamField path="do-ip6" type="yes or no" default="yes">
+If yes, NSD listens to IPv6 connections.
+</ParamField>
+
+### Socket Options
+
+<ParamField path="send-buffer-size" type="number" default="4194304">
+Set the send buffer size for query-servicing sockets in bytes. Set to 0 to use system defaults. Default is 4MB.
+
+```conf
+server:
+    send-buffer-size: 8388608  # 8MB
+```
+</ParamField>
+
+<ParamField path="receive-buffer-size" type="number" default="1048576">
+Set the receive buffer size for query-servicing sockets in bytes. Set to 0 to use system defaults. Default is 1MB.
+</ParamField>
+
+<ParamField path="reuseport" type="yes or no" default="no">
+Use the `SO_REUSEPORT` socket option and create file descriptors for every server in `server-count`. Improves network stack performance. Only useful with `server-count` higher than 1. Works on Linux, not on FreeBSD.
+
+```conf
+server:
+    server-count: 4
+    reuseport: yes
+```
+</ParamField>
+
+## Process Management
+
+<ParamField path="server-count" type="number" default="1">
+Number of NSD server processes to fork. Set to the number of CPU cores for optimal performance.
+
+```conf
+server:
+    server-count: 4  # For 4 CPU cores
+```
+</ParamField>
+
+<ParamField path="cpu-affinity" type="number list">
+Overall CPU affinity for NSD processes on Linux and FreeBSD. Any server/xfrd CPU affinity value will be masked by this value.
+
+```conf
+server:
+    cpu-affinity: 0 1 2 3
+```
+</ParamField>
+
+<ParamField path="server-N-cpu-affinity" type="number">
+Bind NSD server N to a specific core. Only takes effect if `cpu-affinity` is enabled.
+
+```conf
+server:
+    cpu-affinity: 0 1 2 3
+    server-1-cpu-affinity: 0
+    server-2-cpu-affinity: 1
+    server-3-cpu-affinity: 2
+    server-4-cpu-affinity: 3
+```
+</ParamField>
+
+<ParamField path="xfrd-cpu-affinity" type="number">
+Bind xfrd (zone transfer daemon) to a specific core. Only takes effect if `cpu-affinity` is enabled.
+
+```conf
+server:
+    xfrd-cpu-affinity: 3
+```
+</ParamField>
+
+<ParamField path="username" type="string" default="nsd">
+After binding sockets, drop user privileges and assume this username. Can be username, id, or id.gid.
+
+```conf
+server:
+    username: nsd
+```
+</ParamField>
+
+<ParamField path="chroot" type="directory">
+NSD will chroot on startup to the specified directory. Set to "" to disable.
+
+```conf
+server:
+    chroot: /var/nsd
+```
+
+<Warning>
+If using chroot, absolute pathnames elsewhere in the config must have the chroot path prepended.
+</Warning>
+</ParamField>
+
+<ParamField path="zonesdir" type="directory">
+Change working directory to the specified directory before accessing zone files. NSD will also access `zonelistfile`, `logfile`, `pidfile`, `xfrdfile`, `xfrdir`, and other files relative to this directory.
+
+```conf
+server:
+    zonesdir: /etc/nsd
+```
+</ParamField>
+
+## File Locations
+
+<ParamField path="pidfile" type="filename">
+Path to the PID file. Set to "" to disable PID file creation.
+
+```conf
+server:
+    pidfile: /var/run/nsd.pid
+```
+
+<Note>
+The PID file is not chowned to the username for permission safety. It remains owned by the user who started the server.
+</Note>
+</ParamField>
+
+<ParamField path="logfile" type="filename">
+Log messages to this file. Default is to log to stderr and syslog (facility LOG_DAEMON).
+
+```conf
+server:
+    logfile: /var/log/nsd.log
+```
+</ParamField>
+
+<ParamField path="log-only-syslog" type="yes or no" default="no">
+Log messages only to syslog. Useful with systemd to prevent duplicate log entries in journald.
+</ParamField>
+
+<ParamField path="zonelistfile" type="filename" default="@zonelistfile@">
+File used to store the dynamically added list of zones. Used by `nsd-control addzone` and `delzone` commands.
+
+```conf
+server:
+    zonelistfile: /var/db/nsd/zone.list
+```
+</ParamField>
+
+<ParamField path="xfrdfile" type="filename" default="@xfrdfile@">
+The zone transfer daemon saves SOA timeout and state to this file. State is read back after restart. Set to "" to disable (all secondary zones are checked for updates on startup).
+
+```conf
+server:
+    xfrdfile: /var/db/nsd/xfrd.state
+```
+</ParamField>
+
+<ParamField path="xfrdir" type="directory" default="@xfrdir@">
+Directory where zone transfers are stored before processing. A subdirectory is created and removed when NSD exits.
+
+```conf
+server:
+    xfrdir: /tmp/nsd-xfr
+```
+</ParamField>
+
+## TCP Configuration
+
+<ParamField path="tcp-count" type="number" default="100">
+Maximum number of concurrent, active TCP connections by each server process.
+
+```conf
+server:
+    tcp-count: 200
+```
+</ParamField>
+
+<ParamField path="tcp-reject-overflow" type="yes or no" default="no">
+If yes, TCP connections beyond `tcp-count` are immediately dropped (accepted and closed).
+</ParamField>
+
+<ParamField path="tcp-query-count" type="number" default="0">
+Maximum number of queries served on a single TCP connection. Default 0 means no maximum.
+</ParamField>
+
+<ParamField path="tcp-timeout" type="number" default="120">
+TCP timeout in seconds. Also affects zone transfers over TCP.
+</ParamField>
+
+<ParamField path="tcp-mss" type="number" default="0">
+Maximum segment size (MSS) of TCP socket for queries. Lower values (e.g., 1220) can address path MTU problems. Default 0 uses system default.
+
+<Note>
+Not all platforms support the TCP_MAXSEG socket option.
+</Note>
+</ParamField>
+
+<ParamField path="outgoing-tcp-mss" type="number" default="0">
+Maximum segment size for outgoing XFR requests to other nameservers.
+</ParamField>
+
+<ParamField path="tcp-listen-queue" type="number" default="-1 (max)">
+Set the TCP backlog for listening sockets. Higher values allow more pending connections and protect against flooding. Default is -1 on BSDs and Linux (selects largest allowed value), 256 on other systems.
+</ParamField>
+
+## Zone Transfer Configuration
+
+<ParamField path="xfrd-tcp-max" type="number" default="128">
+Number of sockets for xfrd to use for outgoing zone transfers. Increase for more simultaneous zone transfers.
+
+```conf
+server:
+    xfrd-tcp-max: 256  # Allow 256 simultaneous transfers
+```
+</ParamField>
+
+<ParamField path="xfrd-tcp-pipeline" type="number" default="128">
+Number of simultaneous outgoing zone transfers possible on the TCP sockets of xfrd. Maximum is 65536.
+</ParamField>
+
+<ParamField path="xfrd-reload-timeout" type="number" default="1">
+If -1, xfrd will not trigger a reload after zone transfer. If positive, xfrd will wait this many seconds before triggering a new reload. Throttles reloads to once per N seconds.
+</ParamField>
+
+## EDNS Configuration
+
+<ParamField path="ipv4-edns-size" type="number" default="1232">
+Preferred EDNS buffer size for IPv4 in bytes.
+
+```conf
+server:
+    ipv4-edns-size: 1232
+```
+</ParamField>
+
+<ParamField path="ipv6-edns-size" type="number" default="1232">
+Preferred EDNS buffer size for IPv6 in bytes.
+</ParamField>
+
+## Logging and Debugging
+
+<ParamField path="verbosity" type="level" default="0">
+Verbosity level for logging:
+- **0**: Warnings, errors, and important operational events
+- **1**: Successful notifies, successful zone transfers, failed transfers
+- **2**: Soft errors like TCP connection resets, notify refusals, AXFR refusals
+- **3**: Additional detailed information
+
+```conf
+server:
+    verbosity: 1
+```
+</ParamField>
+
+<ParamField path="debug-mode" type="yes or no" default="no">
+Turns on debugging mode. Does not fork a daemon process, stays in foreground. Useful for debugging and with supervisor processes.
+</ParamField>
+
+<ParamField path="log-time-ascii" type="yes or no" default="yes">
+Log time in ASCII format (y-m-d h:m:s.msec). If no, log in seconds since epoch.
+</ParamField>
+
+<ParamField path="log-time-iso" type="yes or no" default="no">
+Log time in ISO8601 format when `log-time-ascii` is also enabled.
+</ParamField>
+
+## Server Identity
+
+<ParamField path="identity" type="string">
+String returned for CH TXT ID.SERVER queries. Default is hostname from `gethostname(3)`. See `hide-identity` to disable responses.
+
+```conf
+server:
+    identity: "DNS Server 1"
+```
+</ParamField>
+
+<ParamField path="hide-identity" type="yes or no" default="no">
+Prevent NSD from replying with identity string on CHAOS class queries.
+</ParamField>
+
+<ParamField path="version" type="string">
+String returned for CH TXT version.server and version.bind queries. Default is the compiled package version. See `hide-version` to disable.
+</ParamField>
+
+<ParamField path="hide-version" type="yes or no" default="no">
+Prevent NSD from replying with version string on CHAOS class queries.
+</ParamField>
+
+<ParamField path="nsid" type="string">
+Add the specified NSID to the EDNS section when queried with NSID EDNS enabled packet. Can be hex string or ascii_ prefix with ASCII string.
+
+```conf
+server:
+    nsid: "aabbccdd"
+    # or
+    nsid: "ascii_MyServer"
+```
+</ParamField>
+
+## Query Processing
+
+<ParamField path="round-robin" type="yes or no" default="no">
+Enable round robin rotation of records in answers. Changes record order for load balancing.
+</ParamField>
+
+<ParamField path="minimal-responses" type="yes or no" default="no">
+Enable minimal responses for smaller answers. Extra data only added for referrals when necessary. Makes packets as small as possible.
+</ParamField>
+
+<ParamField path="confine-to-zone" type="yes or no" default="no">
+If yes, additional information will not be added to responses if the apex zone doesn't match the initial query apex zone (e.g., CNAME resolution).
+</ParamField>
+
+<ParamField path="refuse-any" type="yes or no" default="no">
+Refuse queries of type ANY. Useful to stop query floods. When off, NSD follows RFC 8482 and minimizes response with one RRset.
+
+```conf
+server:
+    refuse-any: yes
+```
+</ParamField>
+
+<ParamField path="drop-updates" type="yes or no" default="no">
+If yes, drop received packets with the UPDATE opcode.
+</ParamField>
+
+## Zone File Management
+
+<ParamField path="zonefiles-check" type="yes or no" default="yes">
+Check mtime of zone files on start and SIGHUP. Disabling starts faster with many zones.
+</ParamField>
+
+<ParamField path="zonefiles-write" type="seconds" default="3600">
+Write updated secondary zones to zonefile every N seconds. If zonefile option is "" (empty), no file is written.
+
+```conf
+server:
+    zonefiles-write: 7200  # Write every 2 hours
+```
+</ParamField>
+
+<ParamField path="reload-config" type="yes or no" default="no">
+Reload configuration file and update TSIG keys and zones on SIGHUP.
+</ParamField>
+
+## Statistics
+
+<ParamField path="statistics" type="number" default="0">
+Produce statistics every N seconds. Default 0 means no statistics. Statistics are logged to the logfile.
+
+```conf
+server:
+    statistics: 3600  # Log stats every hour
+```
+</ParamField>
+
+## Response Rate Limiting (RRL)
+
+<ParamField path="rrl-size" type="number" default="1000000">
+Number of buckets in RRL hashtable. More buckets use more memory but reduce hash collisions.
+
+```conf
+server:
+    rrl-size: 1000000
+```
+</ParamField>
+
+<ParamField path="rrl-ratelimit" type="qps" default="@ratelimit_default@">
+Maximum queries per second allowed from one source. Default 200 qps. Set to 0 to disable.
+
+```conf
+server:
+    rrl-ratelimit: 200
+```
+
+When rate limit is reached, NSD begins dropping responses. One in every `rrl-slip` responses is sent with TC bit set.
+</ParamField>
+
+<ParamField path="rrl-slip" type="number" default="2">
+Number of packets discarded before sending a SLIP response (truncated response). 0 disables SLIP, 1 means every query gets SLIP response. Default 2 cuts traffic in half.
+</ParamField>
+
+<ParamField path="rrl-ipv4-prefix-length" type="subnet" default="24">
+IPv4 prefix length. Addresses are grouped by netblock for rate limiting.
+</ParamField>
+
+<ParamField path="rrl-ipv6-prefix-length" type="subnet" default="64">
+IPv6 prefix length. Addresses are grouped by netblock for rate limiting.
+</ParamField>
+
+<ParamField path="rrl-whitelist-ratelimit" type="qps" default="@ratelimit_default@">
+Maximum qps for whitelisted query types. Default 2000 qps. Set to 0 for unlimited.
+</ParamField>
+
+## DNS Cookies
+
+<ParamField path="answer-cookie" type="yes or no" default="no">
+Enable answering requests containing DNS Cookies (RFC 7873). Provides limited protection against DoS amplification attacks.
+
+```conf
+server:
+    answer-cookie: yes
+```
+
+When enabled, clients with valid server cookies are not subject to rate limiting.
+</ParamField>
+
+<ParamField path="cookie-secret" type="128 bit hex string">
+Cookie secret used to create and verify server cookies. Required for anycast deployments to verify each other's cookies.
+
+```conf
+server:
+    cookie-secret: "000102030405060708090a0b0c0d0e0f"
+```
+</ParamField>
+
+<ParamField path="cookie-staging-secret" type="128 bit hex string">
+Staging cookie secret for cookie rollover in anycast setups. Can verify but not create cookies. Requires `cookie-secret` to be set.
+</ParamField>
+
+<ParamField path="cookie-secret-file" type="filename" default="@cookiesecretsfile@">
+File from which secrets are read for DNS Cookie calculations. Managed with `nsd-control` commands.
+</ParamField>
+
+## TLS Configuration
+
+<ParamField path="tls-service-key" type="filename">
+Private key file for DNS-over-TLS service. Default "" (disabled).
+
+```conf
+server:
+    ip-address: 192.0.2.1@853
+    tls-service-key: /etc/nsd/tls/server.key
+    tls-service-pem: /etc/nsd/tls/server.pem
+```
+
+Requires restart to take effect.
+</ParamField>
+
+<ParamField path="tls-service-pem" type="filename">
+Public certificate file for DNS-over-TLS service.
+</ParamField>
+
+<ParamField path="tls-service-ocsp" type="filename">
+OCSP stapling data file. Must be updated by external process.
+</ParamField>
+
+<ParamField path="tls-port" type="number" default="853">
+Port number for DNS-over-TLS service. Only interfaces configured with @853 get TLS service.
+</ParamField>
+
+<ParamField path="tls-auth-port" type="number">
+Port for authenticated DNS-over-TLS (XFR-over-TLS with mutual authentication). Uses `tls-cert-bundle` for client verification.
+</ParamField>
+
+<ParamField path="tls-auth-xfr-only" type="yes or no" default="no">
+Allow zone transfers only on `tls-auth-port` and only to authenticated clients. Refuses XFR requests on other ports.
+</ParamField>
+
+<ParamField path="tls-cert-bundle" type="filename">
+Certificate bundle for authenticating XFR-over-TLS connections. Default uses system verify locations.
+
+```conf
+server:
+    tls-cert-bundle: /etc/pki/tls/certs/ca-bundle.crt
+```
+</ParamField>
+
+## See Also
+
+- [Zone Configuration](/configuration/zone-configuration)
+- [Patterns](/configuration/patterns)
+- [Access Control](/configuration/access-control)

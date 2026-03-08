@@ -1,0 +1,622 @@
+---
+title: Access Control
+description: Managing ACLs, TSIG keys, and security settings in NSD
+---
+
+# Access Control
+
+NSD provides comprehensive access control mechanisms to secure zone transfers, notifies, and queries. Access control is implemented through TSIG keys, ACLs, and TLS authentication.
+
+## TSIG Keys
+
+TSIG (Transaction Signature) keys provide authenticated communication between DNS servers.
+
+### Defining TSIG Keys
+
+<ParamField path="key" type="block">
+Define a TSIG key for authentication.
+
+```conf
+key:
+    name: "transfer-key"
+    algorithm: hmac-sha256
+    secret: "K2tf3TRjvQkVCmJF3/Z9vA=="
+```
+
+<Note>
+Store keys in a separate file with restricted permissions (mode 600) and include it in the main config.
+</Note>
+</ParamField>
+
+<ParamField path="name" type="string" required>
+Unique name for the key. Used to reference the key in ACLs.
+
+```conf
+key:
+    name: "primary-secondary-key"
+```
+</ParamField>
+
+<ParamField path="algorithm" type="string" required>
+HMAC algorithm for the key. Supported algorithms:
+- `hmac-md5` (deprecated, weak)
+- `hmac-sha1`
+- `hmac-sha224`
+- `hmac-sha256` (recommended)
+- `hmac-sha384`
+- `hmac-sha512`
+
+```conf
+key:
+    algorithm: hmac-sha256
+```
+</ParamField>
+
+<ParamField path="secret" type="string" required>
+Base64-encoded secret material. Must match on both sides of the connection.
+
+```conf
+key:
+    secret: "K2tf3TRjvQkVCmJF3/Z9vA=="
+```
+
+Generate secrets with:
+```bash
+dd if=/dev/random of=/dev/stdout count=1 bs=32 | base64
+```
+</ParamField>
+
+### TSIG Key Examples
+
+```conf
+# Include keys from separate file
+include: "/etc/nsd/secret.keys"
+
+# /etc/nsd/secret.keys (mode 600):
+key:
+    name: "primary-key"
+    algorithm: hmac-sha256
+    secret: "abc123def456=="
+
+key:
+    name: "notify-key"
+    algorithm: hmac-sha512
+    secret: "xyz789uvw012=="
+```
+
+## Access Control Lists (ACLs)
+
+ACLs control which IP addresses can perform specific operations.
+
+### IP Specifications
+
+ACLs support multiple IP specification formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Single IP | `192.0.2.1` | Single IPv4 address |
+| Single IP | `2001:db8::1` | Single IPv6 address |
+| CIDR subnet | `192.0.2.0/24` | CIDR notation subnet |
+| Netmask | `192.0.2.0&255.255.255.0` | Subnet with explicit mask |
+| Range | `192.0.2.10-192.0.2.20` | IP address range |
+| With port | `192.0.2.1@5353` | IP with specific port |
+| Subnet + port | `192.0.2.0/24@5353` | Subnet with port |
+
+<Warning>
+Do not use spaces around `/`, `&`, `@`, and `-` symbols in IP specifications.
+</Warning>
+
+### ACL Keywords
+
+<ParamField path="NOKEY" type="keyword">
+No TSIG authentication required for this ACL entry.
+
+```conf
+zone:
+    provide-xfr: 192.0.2.1 NOKEY
+```
+</ParamField>
+
+<ParamField path="BLOCKED" type="keyword">
+Explicitly block access from this address. Supersedes other entries.
+
+```conf
+zone:
+    # Allow subnet but block one host
+    provide-xfr: 192.0.2.0/24 NOKEY
+    provide-xfr: 192.0.2.100 BLOCKED
+```
+
+BLOCKED entries are checked first, then other entries in order.
+</ParamField>
+
+## Zone Transfer Access Control
+
+### allow-notify
+
+<ParamField path="allow-notify" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Control which addresses can send NOTIFY messages for zone updates.
+
+```conf
+zone:
+    # Accept from single IP without TSIG
+    allow-notify: 192.0.2.1 NOKEY
+    
+    # Require TSIG key
+    allow-notify: 192.0.2.2 transfer-key
+    
+    # Accept from subnet
+    allow-notify: 192.0.2.0/24 NOKEY
+    
+    # With custom port
+    allow-notify: 192.0.2.3@5353 NOKEY
+    
+    # Block specific address
+    allow-notify: 192.0.2.100 BLOCKED
+```
+
+Without any `allow-notify` entries, notifies from any address are accepted.
+</ParamField>
+
+### provide-xfr
+
+<ParamField path="provide-xfr" type="<ip-spec> <key-name | NOKEY | BLOCKED> [tls-auth-name]">
+Control which addresses can request zone transfers (AXFR/IXFR).
+
+```conf
+zone:
+    # Basic zone transfer without TSIG
+    provide-xfr: 192.0.2.1 NOKEY
+    
+    # Require TSIG authentication
+    provide-xfr: 192.0.2.2 transfer-key
+    
+    # Allow subnet transfers
+    provide-xfr: 192.0.2.0/24 NOKEY
+    
+    # IP range
+    provide-xfr: 192.0.2.10-192.0.2.20 NOKEY
+    
+    # XFR-over-TLS with mutual authentication
+    provide-xfr: 192.0.2.5 mykey my-tls-auth
+    
+    # Block specific address
+    provide-xfr: 192.0.2.100 BLOCKED
+```
+
+Without `provide-xfr` entries, no zone transfers are allowed.
+</ParamField>
+
+### request-xfr
+
+<ParamField path="request-xfr" type="[AXFR|UDP] <ip-address> <key-name | NOKEY> [tls-auth-name]">
+Specify primary servers from which to request zone transfers.
+
+```conf
+zone:
+    # Standard IXFR/AXFR over TCP
+    request-xfr: 192.0.2.1 NOKEY
+    
+    # With TSIG authentication
+    request-xfr: 192.0.2.2 transfer-key
+    
+    # Force AXFR only (no IXFR)
+    request-xfr: AXFR 192.0.2.3 NOKEY
+    
+    # IXFR over UDP (requires TSIG)
+    request-xfr: UDP 192.0.2.4 transfer-key
+    
+    # XFR-over-TLS (port 853)
+    request-xfr: 192.0.2.5@853 mykey my-tls-auth
+    
+    # Custom port
+    request-xfr: 192.0.2.6@5353 NOKEY
+```
+
+<Warning>
+UDP and AXFR cannot be combined. AXFR is always over TCP. Use TSIG with UDP transfers for security.
+</Warning>
+</ParamField>
+
+## Query Access Control
+
+### allow-query
+
+<ParamField path="allow-query" type="<ip-spec> <key-name | NOKEY | BLOCKED>">
+Control which addresses can query the zone. Without this option, queries are allowed from any IP.
+
+```conf
+zone:
+    # Allow specific subnet
+    allow-query: 10.0.0.0/8 NOKEY
+    
+    # Allow another network
+    allow-query: 192.0.2.0/24 NOKEY
+    
+    # Require TSIG for queries
+    allow-query: 203.0.113.0/24 query-key
+    
+    # Block specific address
+    allow-query: 10.0.0.100 BLOCKED
+```
+
+<Note>
+Useful for internal zones or zones meant only for XFR over TLS, preventing content leakage.
+</Note>
+</ParamField>
+
+## TLS Authentication (XFR-over-TLS)
+
+TLS authentication provides mutual authentication for zone transfers over TLS.
+
+### Defining TLS Auth
+
+<ParamField path="tls-auth" type="block">
+Define TLS authentication credentials for XFR-over-TLS.
+
+```conf
+tls-auth:
+    name: "secure-xfr"
+    auth-domain-name: "primary.example.com"
+    client-cert: "/etc/nsd/certs/client.pem"
+    client-key: "/etc/nsd/certs/client.key"
+    client-key-pw: "password"
+```
+</ParamField>
+
+<ParamField path="name" type="string" required>
+Name to reference this TLS auth configuration in ACLs.
+
+```conf
+tls-auth:
+    name: "my-tls-auth"
+```
+</ParamField>
+
+<ParamField path="auth-domain-name" type="string" required>
+Authentication domain name as defined in RFC 8310. Must match the SAN DNS entry or CN in the remote certificate.
+
+```conf
+tls-auth:
+    auth-domain-name: "primary.example.com"
+```
+</ParamField>
+
+<ParamField path="client-cert" type="filename">
+Client certificate file for mutual TLS authentication.
+
+```conf
+tls-auth:
+    client-cert: "/etc/nsd/certs/client.pem"
+```
+</ParamField>
+
+<ParamField path="client-key" type="filename">
+Client private key file for mutual TLS authentication.
+
+```conf
+tls-auth:
+    client-key: "/etc/nsd/certs/client.key"
+```
+</ParamField>
+
+<ParamField path="client-key-pw" type="string">
+Password for encrypted client key.
+
+```conf
+tls-auth:
+    client-key-pw: "secretpassword"
+```
+</ParamField>
+
+### XFR-over-TLS Configuration
+
+#### Server Side (Primary)
+
+```conf
+server:
+    # Enable TLS service
+    tls-service-key: "/etc/nsd/tls/server.key"
+    tls-service-pem: "/etc/nsd/tls/server.pem"
+    
+    # Port for authenticated TLS transfers
+    tls-auth-port: 853
+    
+    # Certificate bundle for client verification
+    tls-cert-bundle: "/etc/pki/tls/certs/ca-bundle.crt"
+    
+    # Require authentication for all transfers
+    tls-auth-xfr-only: yes
+
+tls-auth:
+    name: "secondary-auth"
+    auth-domain-name: "secondary.example.com"
+
+zone:
+    name: example.com
+    zonefile: example.com.zone
+    
+    # Require TLS authentication
+    provide-xfr: 192.0.2.1 mykey secondary-auth
+```
+
+#### Client Side (Secondary)
+
+```conf
+tls-auth:
+    name: "primary-auth"
+    auth-domain-name: "primary.example.com"
+    client-cert: "/etc/nsd/certs/client.pem"
+    client-key: "/etc/nsd/certs/client.key"
+
+zone:
+    name: example.com
+    zonefile: example.com.zone
+    
+    # Request transfer over TLS with authentication
+    allow-notify: 192.0.2.10 mykey
+    request-xfr: 192.0.2.10@853 mykey primary-auth
+```
+
+<Note>
+XFR-over-TLS requires TLS 1.3 support. The server must have a valid certificate, and both sides must have compatible TLS implementations.
+</Note>
+
+## Outgoing Interface Control
+
+<ParamField path="outgoing-interface" type="<ip-address>">
+Specify local IP address for outgoing zone transfer requests or NOTIFY messages.
+
+```conf
+zone:
+    # Use specific IPv4 address
+    outgoing-interface: 192.0.2.5
+    
+    # Use specific IPv6 address  
+    outgoing-interface: 2001:db8::5
+    
+    # With custom port
+    outgoing-interface: 192.0.2.5@5353
+```
+
+Useful for:
+- Satisfying access control lists on remote servers
+- Multi-homed servers with multiple IPs
+- Source address selection
+</ParamField>
+
+## Complete ACL Examples
+
+### Primary Zone with Multiple Secondaries
+
+```conf
+key:
+    name: "sec1-key"
+    algorithm: hmac-sha256
+    secret: "abc123=="
+
+key:
+    name: "sec2-key"
+    algorithm: hmac-sha256
+    secret: "def456=="
+
+zone:
+    name: primary.example.com
+    zonefile: primary.example.com.zone
+    
+    # Notify secondaries
+    notify: 192.0.2.1 sec1-key
+    notify: 192.0.2.2 sec2-key
+    notify-retry: 5
+    
+    # Allow transfers to secondaries
+    provide-xfr: 192.0.2.1 sec1-key
+    provide-xfr: 192.0.2.2 sec2-key
+    
+    # Block specific subnet from transfers
+    provide-xfr: 203.0.113.0/24 BLOCKED
+```
+
+### Secondary Zone with Multiple Primaries
+
+```conf
+key:
+    name: "primary-key"
+    algorithm: hmac-sha256
+    secret: "xyz789=="
+
+zone:
+    name: secondary.example.com
+    zonefile: secondary.example.com.zone
+    
+    # Accept notifies from both primaries
+    allow-notify: 192.0.2.10 primary-key
+    allow-notify: 192.0.2.11 primary-key
+    
+    # Request from both primaries
+    request-xfr: 192.0.2.10 primary-key
+    request-xfr: 192.0.2.11 primary-key
+    
+    # Use highest version
+    multi-primary-check: yes
+    
+    # Use specific outgoing IP
+    outgoing-interface: 192.0.2.5
+```
+
+### Secure Zone with XFR-over-TLS
+
+```conf
+key:
+    name: "transfer-key"
+    algorithm: hmac-sha256
+    secret: "secret123=="
+
+tls-auth:
+    name: "secure-primary"
+    auth-domain-name: "primary.example.com"
+    client-cert: "/etc/nsd/certs/client.pem"
+    client-key: "/etc/nsd/certs/client.key"
+
+zone:
+    name: secure.example.com
+    zonefile: secure.example.com.zone
+    
+    # Only accept notifies with TSIG
+    allow-notify: 192.0.2.10 transfer-key
+    
+    # Only transfer over TLS with authentication
+    request-xfr: 192.0.2.10@853 transfer-key secure-primary
+    
+    # No fallback to AXFR
+    allow-axfr-fallback: no
+    
+    # Restrict queries to internal network
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 192.0.2.0/24 NOKEY
+```
+
+### Pattern with Comprehensive ACLs
+
+```conf
+key:
+    name: "common-key"
+    algorithm: hmac-sha256
+    secret: "commonkey123=="
+
+pattern:
+    name: "secure-secondary"
+    
+    # Accept notifies
+    allow-notify: 192.0.2.10 common-key
+    allow-notify: 192.0.2.11 common-key
+    allow-notify: 192.0.2.0/24 BLOCKED  # Block general subnet
+    
+    # Request transfers  
+    request-xfr: 192.0.2.10 common-key
+    request-xfr: 192.0.2.11 common-key
+    
+    # Restrict queries
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 172.16.0.0/12 NOKEY
+    allow-query: 192.168.0.0/16 NOKEY
+    allow-query: 0.0.0.0/0 BLOCKED  # Block everything else
+    
+    zonefile: "%s.zone"
+```
+
+## Best Practices
+
+<AccordionGroup>
+<Accordion title="Always use TSIG for zone transfers">
+Protect zone transfers with TSIG authentication:
+
+```conf
+key:
+    name: "transfer-key"
+    algorithm: hmac-sha256
+    secret: "strongsecret=="
+
+zone:
+    provide-xfr: 192.0.2.1 transfer-key  # Not NOKEY
+    request-xfr: 192.0.2.10 transfer-key
+```
+</Accordion>
+
+<Accordion title="Store keys in separate files">
+Keep keys in files with restricted permissions:
+
+```bash
+# /etc/nsd/nsd.conf
+include: "/etc/nsd/secret.keys"
+
+# Set permissions
+chmod 600 /etc/nsd/secret.keys
+chown root:root /etc/nsd/secret.keys
+```
+</Accordion>
+
+<Accordion title="Use TLS for sensitive zones">
+Deploy XFR-over-TLS for zones with sensitive data:
+
+```conf
+tls-auth:
+    name: "secure-xfr"
+    auth-domain-name: "primary.example.com"
+    client-cert: "/etc/nsd/certs/client.pem"
+    client-key: "/etc/nsd/certs/client.key"
+
+zone:
+    request-xfr: 192.0.2.10@853 mykey secure-xfr
+    allow-axfr-fallback: no
+```
+</Accordion>
+
+<Accordion title="Use BLOCKED for defense in depth">
+Explicitly block problematic addresses:
+
+```conf
+zone:
+    # Allow subnet
+    provide-xfr: 192.0.2.0/24 NOKEY
+    
+    # But block specific hosts
+    provide-xfr: 192.0.2.100 BLOCKED
+    provide-xfr: 192.0.2.101 BLOCKED
+```
+</Accordion>
+
+<Accordion title="Restrict query access for internal zones">
+Use allow-query to limit who can query sensitive zones:
+
+```conf
+zone:
+    name: internal.example.com
+    
+    # Only allow internal networks
+    allow-query: 10.0.0.0/8 NOKEY
+    allow-query: 172.16.0.0/12 NOKEY
+    allow-query: 192.168.0.0/16 NOKEY
+```
+</Accordion>
+</AccordionGroup>
+
+## Troubleshooting ACLs
+
+<Accordion title="How do I debug ACL issues?">
+Increase verbosity to see ACL decisions:
+
+```conf
+server:
+    verbosity: 2  # Shows notify/XFR refusals
+```
+
+Check logs for:
+- "refused notify from" - NOTIFY blocked by allow-notify
+- "refused axfr" - Transfer blocked by provide-xfr
+- "bad tsig" - TSIG authentication failure
+</Accordion>
+
+<Accordion title="Why are my zone transfers failing?">
+Common issues:
+1. **No provide-xfr**: Add `provide-xfr` on primary
+2. **TSIG mismatch**: Ensure key name and secret match exactly
+3. **Wrong algorithm**: Both sides must use same HMAC algorithm  
+4. **Blocked by firewall**: Check network connectivity
+5. **Port mismatch**: Verify @port specifications match
+</Accordion>
+
+<Accordion title="How do ACL entries interact?">
+ACL evaluation order:
+1. BLOCKED entries are checked first and supersede all others
+2. Remaining entries evaluated in configuration order
+3. First match wins
+4. If no match and ACL type specified, access denied
+5. If no ACL entries of that type, default behavior applies
+</Accordion>
+
+## See Also
+
+- [Zone Configuration](/configuration/zone-configuration)
+- [Patterns](/configuration/patterns)
+- [Server Options](/configuration/server-options)

@@ -1,0 +1,585 @@
+---
+title: 'Installing NSD'
+description: 'Step-by-step guide to installing NSD from packages or building from source'
+---
+
+# Installing NSD
+
+NSD can be installed via package managers on most systems, or built from source for custom configurations and the latest features.
+
+## System Requirements
+
+Before installing NSD, ensure your system meets these requirements:
+
+### Operating System
+
+NSD runs on Unix-like operating systems:
+
+- Linux (all major distributions)
+- FreeBSD, OpenBSD, NetBSD
+- macOS
+- Solaris
+
+### Hardware Requirements
+
+<Note>
+**Minimum requirements:**
+- CPU: Any modern processor (64-bit recommended)
+- RAM: 512 MB minimum (scales with zone size)
+- Disk: 100 MB for binaries + space for zone files
+
+**Recommended for production:**
+- Multi-core CPU for parallel query processing
+- 2+ GB RAM for large zone datasets
+- SSD storage for faster zone loading
+</Note>
+
+## Dependencies
+
+NSD requires several libraries and tools:
+
+### Required Dependencies
+
+<Steps>
+  <Step title="C Toolchain">
+    Compiler, linker, and assembler for building C code
+    
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install build-essential
+    
+    # RHEL/CentOS/Fedora
+    sudo yum groupinstall "Development Tools"
+    
+    # macOS (via Xcode)
+    xcode-select --install
+    ```
+  </Step>
+  
+  <Step title="OpenSSL with Headers">
+    Required for DNSSEC and TSIG cryptographic operations
+    
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install libssl-dev
+    
+    # RHEL/CentOS/Fedora
+    sudo yum install openssl-devel
+    
+    # macOS
+    brew install openssl
+    ```
+  </Step>
+  
+  <Step title="libevent with Headers">
+    Event notification library for high-performance I/O
+    
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install libevent-dev
+    
+    # RHEL/CentOS/Fedora
+    sudo yum install libevent-devel
+    
+    # macOS
+    brew install libevent
+    ```
+  </Step>
+  
+  <Step title="Flex (Lexical Analyzer)">
+    Generates lexical analyzers for config parsing
+    
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install flex
+    
+    # RHEL/CentOS/Fedora
+    sudo yum install flex
+    
+    # macOS
+    brew install flex
+    ```
+  </Step>
+  
+  <Step title="Bison (Parser Generator)">
+    Generates parsers for configuration files
+    
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install bison
+    
+    # RHEL/CentOS/Fedora
+    sudo yum install bison
+    
+    # macOS
+    brew install bison
+    ```
+  </Step>
+</Steps>
+
+### Optional Dependencies
+
+For additional features:
+
+- **libxdp, libbpf, libcap** - For XDP (AF_XDP) socket support
+- **protobuf-c** - For dnstap logging support
+- **systemd development files** - For systemd integration
+
+## Installing from Packages
+
+The easiest way to install NSD is through your system's package manager.
+
+<Warning>
+Package manager versions may be outdated. Check `nsd -v` after installation to verify the version.
+</Warning>
+
+<CodeGroup>
+
+```bash Debian/Ubuntu
+# Update package index
+sudo apt update
+
+# Install NSD
+sudo apt install nsd
+
+# Verify installation
+nsd -v
+```
+
+```bash RHEL/CentOS/Fedora
+# Install NSD from EPEL (for RHEL/CentOS)
+sudo yum install epel-release
+
+# Install NSD
+sudo yum install nsd
+
+# Verify installation
+nsd -v
+```
+
+```bash FreeBSD
+# Using pkg
+pkg install nsd
+
+# Or using ports
+cd /usr/ports/dns/nsd
+make install clean
+
+# Verify installation
+nsd -v
+```
+
+```bash OpenBSD
+# NSD is in base system, but can also install via pkg
+pkg_add nsd
+
+# Verify installation
+nsd -v
+```
+
+```bash macOS
+# Using Homebrew
+brew install nsd
+
+# Verify installation
+nsd -v
+```
+
+```bash Alpine Linux
+# Install NSD
+apk add nsd
+
+# Verify installation
+nsd -v
+```
+
+</CodeGroup>
+
+### Post-Installation Steps
+
+After installing via package manager:
+
+<Steps>
+  <Step title="Check Installation">
+    Verify NSD is installed correctly:
+    
+    ```bash
+    nsd -v
+    ```
+    
+    This shows version information and compile-time options.
+  </Step>
+  
+  <Step title="Locate Configuration">
+    Find where your package installed the config file:
+    
+    ```bash
+    # Common locations
+    ls -l /etc/nsd/nsd.conf
+    # or
+    ls -l /usr/local/etc/nsd/nsd.conf
+    ```
+  </Step>
+  
+  <Step title="Setup Control Keys">
+    Generate keys for nsd-control:
+    
+    ```bash
+    sudo nsd-control-setup
+    ```
+  </Step>
+</Steps>
+
+## Building from Source
+
+Building from source gives you the latest version and full control over compile-time options.
+
+### Downloading the Source
+
+<Steps>
+  <Step title="Download Latest Release">
+    Get the latest stable release from the NLnet Labs website:
+    
+    ```bash
+    # Download NSD 4.14.2 (check for latest version)
+    wget https://nlnetlabs.nl/downloads/nsd/nsd-4.14.2.tar.gz
+    
+    # Verify checksum (optional but recommended)
+    wget https://nlnetlabs.nl/downloads/nsd/nsd-4.14.2.tar.gz.sha256
+    sha256sum -c nsd-4.14.2.tar.gz.sha256
+    
+    # Extract the archive
+    tar xzf nsd-4.14.2.tar.gz
+    cd nsd-4.14.2
+    ```
+  </Step>
+  
+  <Step title="Or Clone from Git">
+    For the development version:
+    
+    ```bash
+    # Clone the repository
+    git clone https://github.com/NLnetLabs/nsd.git
+    cd nsd
+    
+    # Initialize submodules (includes simdzone)
+    git submodule update --init
+    
+    # Generate configure script
+    autoreconf -fi
+    ```
+    
+    <Note>
+    Older versions of `autoreconf` may not install auxiliary files. Run `libtoolize -fi -c` first if needed.
+    </Note>
+  </Step>
+</Steps>
+
+### Compiling NSD
+
+<Steps>
+  <Step title="Install Build Dependencies">
+    On Ubuntu/Debian:
+    
+    ```bash
+    sudo apt update
+    sudo apt install -y build-essential libssl-dev libevent-dev flex bison
+    ```
+  </Step>
+  
+  <Step title="Configure the Build">
+    Run the configure script to check dependencies and set options:
+    
+    ```bash
+    ./configure
+    ```
+    
+    The configure script will:
+    - Check for required dependencies
+    - Detect system capabilities
+    - Set default installation paths
+    
+    <Note>
+    Use `./configure --help` to see all available configuration options.
+    </Note>
+  </Step>
+  
+  <Step title="Compile the Source">
+    Build NSD using make:
+    
+    ```bash
+    # Use -j4 to compile with 4 parallel jobs (adjust for your CPU)
+    make -j4
+    ```
+    
+    This may take a few minutes depending on your system.
+  </Step>
+  
+  <Step title="Install the Binaries">
+    Install NSD to your system:
+    
+    ```bash
+    sudo make install
+    ```
+    
+    By default, this installs to `/usr/local/sbin/nsd`.
+  </Step>
+</Steps>
+
+### Common Configure Options
+
+Customize your build with configure options:
+
+```bash Configure options
+./configure \
+  --prefix=/usr/local \
+  --sysconfdir=/etc \
+  --localstatedir=/var \
+  --with-configdir=/etc/nsd \
+  --with-pidfile=/var/run/nsd.pid \
+  --with-zonesdir=/etc/nsd/zones \
+  --with-user=nsd \
+  --enable-ratelimit \
+  --enable-recvmmsg \
+  --enable-nsec3 \
+  --enable-minimal-responses
+```
+
+<Note>
+**Key configure options:**
+
+- `--prefix=/path` - Installation prefix (default: /usr/local)
+- `--sysconfdir=/path` - System configuration directory
+- `--with-configdir=/path` - NSD configuration directory
+- `--with-user=username` - User to run NSD as (default: nsd)
+- `--with-libevent=/path` - Path to libevent installation
+- `--with-ssl=/path` - Path to OpenSSL installation
+- `--enable-ratelimit` - Enable response rate limiting
+- `--enable-recvmmsg` - Enable recvmmsg/sendmmsg for better performance
+- `--enable-nsec3` - Enable NSEC3 support (requires OpenSSL)
+- `--enable-minimal-responses` - Reduce response sizes to minimize truncation
+- `--enable-xdp` - Enable XDP support (requires libxdp, libbpf, libcap)
+- `--enable-packed` - Use packed structure alignment (less memory, unaligned reads)
+- `--disable-ipv6` - Disable IPv6 support
+</Note>
+
+### Building with Advanced Features
+
+#### XDP Support (Ultra-High Performance)
+
+For maximum performance with AF_XDP sockets:
+
+```bash XDP build
+# Install XDP dependencies (Ubuntu/Debian)
+sudo apt install libxdp-dev libbpf-dev libcap-dev clang llvm
+
+# Configure with XDP
+./configure --enable-xdp
+
+# Build and install
+make -j4
+sudo make install
+```
+
+#### DNStap Logging Support
+
+For detailed query logging with dnstap:
+
+```bash DNStap build
+# Install protobuf-c
+sudo apt install libprotobuf-c-dev protobuf-c-compiler
+
+# Configure with dnstap
+./configure --enable-dnstap
+
+# Build and install
+make -j4
+sudo make install
+```
+
+### Testing the Installation
+
+Verify your NSD build:
+
+<Steps>
+  <Step title="Check Version and Features">
+    ```bash
+    nsd -v
+    ```
+    
+    Output shows version and enabled features:
+    ```
+    NSD 4.14.2
+    
+    configured with:
+      --enable-ratelimit
+      --enable-recvmmsg
+      --enable-nsec3
+      --with-libevent
+    ```
+  </Step>
+  
+  <Step title="Run in Debug Mode">
+    Test NSD runs without errors:
+    
+    ```bash
+    # Create minimal config for testing
+    sudo nsd -d -c /etc/nsd/nsd.conf -V 3
+    ```
+    
+    Options:
+    - `-d` - Run in foreground (debug mode)
+    - `-c` - Specify config file
+    - `-V 3` - Increase verbosity level
+    
+    Press Ctrl+C to stop.
+  </Step>
+  
+  <Step title="Verify Control Utility">
+    Check nsd-control is working:
+    
+    ```bash
+    nsd-control -h
+    ```
+  </Step>
+</Steps>
+
+## Creating the NSD User
+
+For security, NSD should run as an unprivileged user:
+
+```bash Create nsd user
+# Create system user and group
+sudo useradd -r -s /bin/false -d /var/lib/nsd nsd
+
+# Create necessary directories
+sudo mkdir -p /var/lib/nsd /var/run/nsd /etc/nsd/zones
+
+# Set ownership
+sudo chown -R nsd:nsd /var/lib/nsd /var/run/nsd /etc/nsd/zones
+```
+
+## Setting Up nsd-control
+
+The `nsd-control` utility allows you to control NSD remotely:
+
+<Steps>
+  <Step title="Generate Control Keys">
+    ```bash
+    sudo nsd-control-setup
+    ```
+    
+    This generates:
+    - `/etc/nsd/nsd_server.key` - Server private key
+    - `/etc/nsd/nsd_server.pem` - Server certificate
+    - `/etc/nsd/nsd_control.key` - Control private key
+    - `/etc/nsd/nsd_control.pem` - Control certificate
+  </Step>
+  
+  <Step title="Enable in Configuration">
+    Add to `/etc/nsd/nsd.conf`:
+    
+    ```conf
+    remote-control:
+        control-enable: yes
+        control-interface: 127.0.0.1
+        server-key-file: "/etc/nsd/nsd_server.key"
+        server-cert-file: "/etc/nsd/nsd_server.pem"
+        control-key-file: "/etc/nsd/nsd_control.key"
+        control-cert-file: "/etc/nsd/nsd_control.pem"
+    ```
+  </Step>
+  
+  <Step title="Test Control Access">
+    Start NSD and test control:
+    
+    ```bash
+    # Start NSD
+    sudo nsd-control start
+    
+    # Check status
+    sudo nsd-control status
+    ```
+  </Step>
+</Steps>
+
+## Systemd Integration
+
+For systemd-based systems, create a service unit:
+
+```ini /etc/systemd/system/nsd.service
+[Unit]
+Description=NSD Authoritative DNS Server
+After=network.target
+
+[Service]
+Type=forking
+User=nsd
+PIDFile=/var/run/nsd.pid
+ExecStart=/usr/local/sbin/nsd -c /etc/nsd/nsd.conf
+ExecReload=/usr/local/sbin/nsd-control reload
+ExecStop=/usr/local/sbin/nsd-control stop
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable nsd
+sudo systemctl start nsd
+sudo systemctl status nsd
+```
+
+## Troubleshooting Installation
+
+### Configure Fails to Find OpenSSL
+
+```bash
+# Specify OpenSSL path explicitly
+./configure --with-ssl=/usr/local/opt/openssl
+```
+
+### Configure Fails to Find libevent
+
+```bash
+# Specify libevent path explicitly
+./configure --with-libevent=/usr/local
+```
+
+### Flex or Bison Not Found
+
+Ensure both are installed:
+
+```bash
+# Debian/Ubuntu
+sudo apt install flex bison
+
+# Verify
+flex --version
+bison --version
+```
+
+### Permission Denied on Port 53
+
+NSD needs root to bind to port 53, then drops privileges:
+
+```bash
+# Start as root (it will drop to 'nsd' user)
+sudo nsd
+
+# Or use systemd/init system
+sudo systemctl start nsd
+```
+
+## Next Steps
+
+Now that NSD is installed, proceed to configuration:
+
+<Card title="Quick Start Guide" icon="rocket" href="/quickstart">
+  Get NSD up and running with a basic configuration
+</Card>

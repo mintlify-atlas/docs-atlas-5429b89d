@@ -1,0 +1,680 @@
+---
+title: "XDP/AF_XDP Support"
+description: "High-performance packet processing with XDP and AF_XDP sockets in NSD"
+---
+
+# XDP/AF_XDP Support
+
+NSD includes experimental support for AF_XDP (Address Family XDP) sockets, which provide a fast-path for network packets from the device driver directly to user-space memory. This bypasses the kernel network stack for significant performance improvements.
+
+<Warning>
+**Experimental Feature**: XDP support is experimental and requires specific kernel and driver support. Thoroughly test before deploying in production.
+</Warning>
+
+## Overview
+
+AF_XDP introduces a fast-path that:
+
+- Bypasses the Linux network stack for UDP queries
+- Reduces CPU usage for packet processing
+- Increases query throughput
+- Enables zero-copy packet handling (driver-dependent)
+
+**Performance benefits**:
+- **2-3x query throughput** for high packet rates
+- **30-50% CPU reduction** for packet processing
+- **Sub-microsecond latency** improvements
+
+<Note>
+XDP in NSD only handles **UDP queries**. TCP, TLS, and other protocols use the standard network stack.
+</Note>
+
+## Requirements
+
+### Kernel Requirements
+
+- **Linux kernel**: 5.3 or newer (5.10+ recommended)
+- **XDP support**: Enabled in kernel configuration
+- **AF_XDP socket support**: `CONFIG_XDP_SOCKETS=y`
+
+```bash
+# Check kernel XDP support
+grep CONFIG_XDP_SOCKETS /boot/config-$(uname -r)
+# Should show: CONFIG_XDP_SOCKETS=y
+
+# Check kernel version
+uname -r
+# Should be >= 5.3
+```
+
+### Driver Requirements
+
+Not all network drivers support AF_XDP. Check compatibility:
+
+**Fully supported drivers** (zero-copy):
+- Intel: i40e, ice, ixgbe, igb
+- Mellanox: mlx5
+- Broadcom: bnxt
+- Netronome: nfp
+
+**Generic XDP** (copy mode):
+- Most drivers support generic XDP with copy mode
+- Lower performance but wider compatibility
+
+```bash
+# Check network driver
+ethtool -i eth0 | grep driver
+
+# Check XDP support
+ip link show eth0 | grep -i xdp
+```
+
+### Build Dependencies
+
+From `doc/manual/xdp.rst:14`:
+
+```bash
+# For Debian/Ubuntu
+sudo apt install -y libxdp-dev libbpf-dev libcap-dev clang llvm gcc-multilib
+
+# For RHEL/CentOS
+sudo yum install -y libxdp-devel libbpf-devel libcap-devel clang llvm
+```
+
+### Compile NSD with XDP
+
+<Steps>
+
+### Clone and Prepare
+
+```bash
+# Clone NSD repository
+git clone https://github.com/NLnetLabs/nsd
+cd nsd
+
+# Initialize submodules (contains XDP program)
+git submodule update --init
+
+# Generate build files
+autoreconf -fi
+```
+
+### Configure with XDP
+
+```bash
+# Configure with XDP support enabled
+./configure --enable-xdp \
+    --with-configdir=/etc/nsd \
+    --with-user=nsd
+
+# Verify XDP is enabled
+grep "define USE_XDP" config.h
+# Should show: #define USE_XDP 1
+```
+
+### Build and Install
+
+```bash
+# Build
+make -j$(nproc)
+
+# Install
+sudo make install
+```
+
+</Steps>
+
+## Configuration
+
+### Basic XDP Configuration
+
+<Tabs>
+  <Tab title="Simple Setup">
+    ```conf
+    server:
+        # Enable XDP on specific interface
+        xdp-interface: eth0
+        
+        # NSD automatically:
+        # - Loads the XDP program
+        # - Creates AF_XDP sockets
+        # - Unloads on shutdown
+    ```
+    
+    This minimal configuration enables XDP with automatic program loading.
+  </Tab>
+  
+  <Tab title="Force Copy Mode">
+    ```conf
+    server:
+        xdp-interface: eth0
+        
+        # Force copy mode (compatibility)
+        xdp-force-copy: yes
+    ```
+    
+    Use this for drivers with broken zero-copy support.
+  </Tab>
+  
+  <Tab title="Custom XDP Program">
+    ```conf
+    server:
+        xdp-interface: eth0
+        
+        # Don't load program automatically
+        xdp-program-load: no
+        
+        # Path to custom XDP program
+        xdp-program-path: "/usr/share/nsd/custom-xdp.o"
+        
+        # BPF filesystem path for map pinning
+        xdp-bpffs-path: "/sys/fs/bpf"
+    ```
+    
+    Load your own XDP program for custom filtering.
+  </Tab>
+</Tabs>
+
+### Advanced Configuration
+
+```conf
+server:
+    # XDP interface
+    xdp-interface: eth0
+    
+    # Server count matches NIC queues
+    # XDP spawns one process per RX/TX queue
+    server-count: 8
+    
+    # CPU affinity for performance
+    cpu-affinity: 0 1 2 3 4 5 6 7
+    server-1-cpu-affinity: 0
+    server-2-cpu-affinity: 1
+    server-3-cpu-affinity: 2
+    server-4-cpu-affinity: 3
+    server-5-cpu-affinity: 4
+    server-6-cpu-affinity: 5
+    server-7-cpu-affinity: 6
+    server-8-cpu-affinity: 7
+    
+    # Regular UDP/TCP ports still work
+    ip-address: 0.0.0.0
+```
+
+## XDP Program Details
+
+### Bundled XDP Program
+
+NSD includes two XDP programs:
+
+1. **xdp-dns-redirect_kern.o**: Standard version
+2. **xdp-dns-redirect_kern_pinned.o**: With map pinning support
+
+From `xdp-server.c:59`, the program redirects UDP traffic to port 53:
+
+```c
+#define DNS_PORT 53
+
+static inline void *parse_udp(struct udphdr *udp) {
+    if (ntohs(udp->dest) != DNS_PORT)
+        return NULL;
+    return (void *)(udp + 1);
+}
+```
+
+**Program features**:
+- Filters UDP packets to port 53
+- Supports IPv4 and IPv6
+- Handles Ethernet framing
+- Redirects to AF_XDP socket
+
+### Custom XDP Program Requirements
+
+If writing your own XDP program, you must define:
+
+```c
+// Required: BPF_MAP_TYPE_XSKMAP named "xsks_map"
+struct {
+    __uint(type, BPF_MAP_TYPE_XSKMAP);
+    __type(key, __u32);
+    __type(value, __u32);
+    __uint(max_entries, 64);  // >= number of queues
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} xsks_map SEC(".maps");
+```
+
+### Loading Your Own XDP Program
+
+<Steps>
+
+### Load Program with xdp-loader
+
+```bash
+# Load XDP program with pinned map
+sudo xdp-loader load -p /sys/fs/bpf eth0 \
+    /usr/share/nsd/xdp-dns-redirect_kern_pinned.o
+
+# Set permissions for NSD
+sudo chown nsd /sys/fs/bpf/xsks_map
+sudo chmod o+x /sys/fs/bpf
+```
+
+### Configure NSD to Use Pre-loaded Program
+
+```conf
+server:
+    xdp-interface: eth0
+    
+    # Don't load program
+    xdp-program-load: no
+    
+    # Path to program (for map structure)
+    xdp-program-path: "/usr/share/nsd/xdp-dns-redirect_kern_pinned.o"
+    
+    # BPF filesystem path
+    xdp-bpffs-path: "/sys/fs/bpf"
+```
+
+### Start NSD
+
+```bash
+systemctl start nsd
+
+# Verify XDP is active
+ip link show eth0 | grep xdp
+# Should show: xdp/id:XXX
+```
+
+</Steps>
+
+## Network Interface Configuration
+
+### Queue Configuration
+
+The number of NSD server processes matches the number of combined NIC queues:
+
+```bash
+# Check current queue count
+ethtool -l eth0
+
+# Output:
+Channel parameters for eth0:
+Combined:   8  # This many NSD processes will use XDP
+
+# Set queue count
+sudo ethtool -L eth0 combined 8
+```
+
+<Note>
+If `server-count` is less than the queue count, excess queues won't use XDP.
+If `server-count` is greater, excess processes won't use XDP.
+</Note>
+
+### IP Address Handling
+
+From `xdp-server.c:609`, NSD automatically detects IP addresses on the XDP interface:
+
+```c
+static int figure_ip_addresses(struct xdp_server *xdp) {
+    struct ifaddrs *ifaddr;
+    
+    // Get all addresses on the interface
+    if (getifaddrs(&ifaddr) == -1)
+        return -1;
+    
+    // Filter for XDP interface
+    for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (strcmp(ifa->ifa_name, xdp->interface_name))
+            continue;
+        
+        // Add IPv4 and IPv6 addresses
+        if (ifa->ifa_addr->sa_family == AF_INET ||
+            ifa->ifa_addr->sa_family == AF_INET6) {
+            add_ip_address(xdp, (struct sockaddr_storage *) ifa->ifa_addr);
+        }
+    }
+}
+```
+
+NSD only accepts queries destined for IPs assigned to the XDP interface.
+
+## Performance Tuning
+
+### CPU Affinity
+
+From the configuration guide, align CPU affinity with NIC queue affinity:
+
+```bash
+# Check NIC queue CPU affinity
+for i in /sys/class/net/eth0/queues/rx-*/rps_cpus; do
+    echo "$i: $(cat $i)"
+done
+
+# Set in NSD configuration
+```
+
+```conf
+server:
+    xdp-interface: eth0
+    server-count: 8
+    
+    # Align with NIC queue to CPU mapping
+    cpu-affinity: 0 1 2 3 4 5 6 7
+    server-1-cpu-affinity: 0
+    server-2-cpu-affinity: 1
+    # ... etc
+```
+
+<Warning>
+**CPU Affinity**: Misconfigured CPU affinity can hurt performance. Match NSD server affinity to the NIC's queue-to-CPU mapping for best results.
+</Warning>
+
+### Memory Limits
+
+XDP requires locked memory. From `xdp-server.c:481`:
+
+```c
+int xdp_server_init(struct xdp_server *xdp) {
+    struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
+    
+    // Increase locked memory limit
+    if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
+        log_msg(LOG_ERR, "xdp: cannot adjust rlimit (RLIMIT_MEMLOCK)");
+        return -1;
+    }
+}
+```
+
+This is handled automatically, but can also be set system-wide:
+
+```bash
+# Edit /etc/security/limits.conf
+nsd soft memlock unlimited
+nsd hard memlock unlimited
+```
+
+### Buffer Sizes
+
+From the source, XDP uses fixed buffer sizes:
+
+```c
+#define XDP_FRAME_SIZE 2048      // Frame size
+#define XDP_NUM_FRAMES 4096      // Frames per queue
+#define XDP_BUFFER_SIZE (XDP_FRAME_SIZE * XDP_NUM_FRAMES)  // 8 MB
+
+#define XSK_RING_PROD__NUM_DESCS 2048  // Producer ring size
+#define XSK_RING_CONS__NUM_DESCS 2048  // Consumer ring size
+```
+
+**Memory usage per queue**: ~8-10 MB
+
+### Batch Processing
+
+```c
+#define XDP_RX_BATCH_SIZE 64  // Process 64 packets at once
+```
+
+NSD processes packets in batches for efficiency.
+
+## Monitoring and Debugging
+
+### Check XDP Status
+
+```bash
+# Verify XDP program is loaded
+ip link show eth0
+# Look for: xdpgeneric/id:XXX or xdpoffload/id:XXX
+
+# View XDP statistics
+sudo bpftool prog show
+sudo bpftool map show
+
+# Check NSD is using XDP
+ps aux | grep nsd
+# Should see multiple nsd processes
+```
+
+### Enable Verbose Logging
+
+```conf
+server:
+    verbosity: 2
+    xdp-interface: eth0
+```
+
+Logs include:
+- XDP program load/unload
+- Socket creation
+- Packet processing errors
+
+### Performance Metrics
+
+```bash
+# NSD statistics (includes XDP queries)
+nsd-control stats
+
+# Look for:
+# num.udp: Total UDP queries
+# num.udp6: Total UDP6 queries
+
+# System-level XDP stats
+ethtool -S eth0 | grep xdp
+```
+
+## Limitations and Considerations
+
+### Current Limitations
+
+From the documentation:
+
+<Note>
+**Not supported via XDP**:
+- PROXYv2 protocol
+- DNSTAP logging
+- Rate limiting (RRL)
+- TCP queries
+- DNS-over-TLS
+
+These features still work via the standard network stack.
+</Note>
+
+### Network Protocol Support
+
+XDP code path handles:
+- ✓ UDP over IPv4
+- ✓ UDP over IPv6
+- ✓ Ethernet framing
+- ✗ VLAN tags (not yet implemented)
+- ✗ TCP
+- ✗ Other L4 protocols
+
+### Zero-Copy vs Copy Mode
+
+**Zero-copy mode** (driver-dependent):
+- Highest performance
+- Requires driver support
+- Default if supported
+
+**Copy mode** (fallback):
+- Works with all drivers
+- Lower performance than zero-copy
+- Still faster than standard stack
+
+Force copy mode if zero-copy has issues:
+
+```conf
+server:
+    xdp-interface: eth0
+    xdp-force-copy: yes
+```
+
+## Troubleshooting
+
+<Accordion title="XDP Program Load Fails">
+  **Symptom**: NSD fails to start with XDP error
+
+  **Diagnosis**:
+  ```bash
+  # Check kernel support
+  grep CONFIG_XDP_SOCKETS /boot/config-$(uname -r)
+  
+  # Check permissions
+  sudo -u nsd ls -la /sys/fs/bpf/
+  
+  # Check driver support
+  ethtool -i eth0
+  ```
+
+  **Solutions**:
+  - Kernel too old: Upgrade to 5.10+
+  - Driver doesn't support: Use `xdp-force-copy: yes`
+  - Permissions issue: Check file ownership and modes
+</Accordion>
+
+<Accordion title="Performance Not Improving">
+  **Symptom**: XDP enabled but no performance gain
+
+  **Diagnosis**:
+  ```bash
+  # Check if XDP is active
+  ip link show eth0 | grep xdp
+  
+  # Check CPU affinity
+  ps -eLo pid,tid,class,rtprio,ni,pri,psr,comm | grep nsd
+  
+  # Check queue distribution
+  ethtool -S eth0 | grep rx_queue
+  ```
+
+  **Common Causes**:
+  - CPU affinity misconfigured
+  - Wrong number of server processes
+  - Driver using generic XDP (slow)
+  - Copy mode instead of zero-copy
+</Accordion>
+
+<Accordion title="Queries Not Reaching NSD">
+  **Symptom**: Queries time out or fail
+
+  **Diagnosis**:
+  ```bash
+  # Test UDP queries
+  dig @SERVER-IP example.com +retry=0
+  
+  # Check XDP program
+  sudo bpftool prog show
+  
+  # Check IP addresses
+  ip addr show eth0
+  ```
+
+  **Solutions**:
+  - Verify IP addresses on interface
+  - Check firewall rules
+  - Ensure port 53 UDP is open
+  - Test with non-XDP interface first
+</Accordion>
+
+<Accordion title="Can't Unload XDP Program">
+  **Symptom**: XDP program remains after NSD stops
+
+  **Cause**: NSD loads with `LIBXDP_SKIP_DISPATCHER=1` to allow unloading without CAP_SYS_ADMIN
+
+  **Manual Unload**:
+  ```bash
+  # Unload XDP program
+  sudo ip link set eth0 xdpgeneric off
+  # or
+  sudo ip link set eth0 xdpoffload off
+  
+  # Remove pinned map
+  sudo rm /sys/fs/bpf/xsks_map
+  ```
+</Accordion>
+
+## Security Considerations
+
+<Warning>
+**Security Notes**:
+
+1. **Bypass kernel network stack**: XDP bypasses netfilter/iptables for handled packets
+2. **Filter at XDP level**: Implement filtering in the XDP program if needed
+3. **Memory limits**: XDP can lock significant memory; monitor usage
+4. **Rate limiting unavailable**: Use alternative DoS protection
+</Warning>
+
+### Recommended Security Practices
+
+```conf
+server:
+    # Enable XDP for performance
+    xdp-interface: eth0
+    
+    # Standard network stack for management
+    ip-address: 127.0.0.1  # localhost access
+    
+    # Enable access controls
+    refuse-any: yes
+    
+    # Monitor with verbosity
+    verbosity: 1
+```
+
+## Migration Strategy
+
+<Steps>
+
+### Test Environment Setup
+
+```bash
+# Set up test server with XDP
+# Test query load and monitor
+```
+
+### Enable XDP on Production
+
+```conf
+server:
+    # Enable alongside existing network stack
+    xdp-interface: eth0
+    
+    # Keep standard IP bindings as backup
+    ip-address: 0.0.0.0
+```
+
+### Monitor Performance
+
+```bash
+# Compare before/after metrics
+nsd-control stats > stats-with-xdp.txt
+
+# Monitor CPU usage
+top -p $(pidof nsd)
+```
+
+### Rollback if Needed
+
+```conf
+# Simply comment out XDP interface
+# xdp-interface: eth0
+
+# Reload
+nsd-control reconfig
+```
+
+</Steps>
+
+## Best Practices
+
+1. **Match server-count to NIC queues** for optimal distribution
+2. **Configure CPU affinity** aligned with NIC queue affinity
+3. **Use zero-copy mode** when driver supports it
+4. **Monitor performance** before and after enabling XDP
+5. **Test thoroughly** in non-production first
+6. **Keep fallback ready** via standard network stack
+
+## Related Topics
+
+- [Performance Tuning](/administration/tuning) - General NSD optimization
+- [Rate Limiting](/advanced/rate-limiting) - DoS protection (not available via XDP)
+- [Server Configuration](/configuration/server-options) - Basic server setup

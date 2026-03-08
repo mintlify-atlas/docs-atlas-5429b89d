@@ -1,0 +1,199 @@
+---
+title: Performance Tuning
+description: Optimize NSD performance through server scaling, CPU affinity, and network configuration
+---
+
+NSD is designed for high performance, capable of handling hundreds of thousands or even millions of queries per second. This guide covers advanced tuning options to maximize throughput and efficiency.
+
+## Default Optimizations
+
+NSD includes performance optimizations by default:
+
+- **libevent**: Automatically uses the most efficient event mechanism for your platform (e.g., `epoll` on Linux, `kqueue` on FreeBSD)
+- **recvmmsg**: Can be enabled at compile time with `--enable-recvmmsg` to read multiple messages from a socket in one system call
+
+<Tip>
+These defaults work well for most deployments. Only pursue advanced tuning if you have specific high-performance requirements.
+</Tip>
+
+## Server Scaling
+
+The simplest way to improve performance is to match the number of server processes to your CPU cores.
+
+### Basic Multi-Server Configuration
+
+```text
+server:
+  server-count: 4
+  reuseport: yes
+```
+
+**Configuration details:**
+- `server-count`: Set this to the number of CPU cores available
+- `reuseport`: Distributes incoming packets evenly across server processes (requires OS support)
+
+<Tip>
+Keep `server-count` lower than or equal to your total CPU cores for optimal performance.
+</Tip>
+
+## TCP Performance
+
+Increase TCP capacity for high-traffic environments:
+
+```text
+server:
+  tcp-count: 1000
+  tcp-timeout: 3
+  tcp-reject-overflow: yes
+```
+
+**Parameters:**
+- `tcp-count`: Maximum number of concurrent TCP connections (default is much lower)
+- `tcp-timeout`: Seconds before idle connections are closed
+- `tcp-reject-overflow`: Prevents kernel connection queue from growing indefinitely
+
+## Processor Affinity
+
+For maximum throughput, bind server processes to specific CPU cores to improve cache hit rates and reduce context switching.
+
+### How CPU Affinity Works
+
+When a process switches between CPU cores, performance degrades because:
+- L1/L2 cache must be rebuilt on the new core
+- Pipeline state is lost
+- Frequently accessed data must be reloaded
+
+Pinning processes to dedicated cores eliminates this overhead.
+
+### Basic CPU Affinity
+
+```text
+server:
+  server-count: 2
+  cpu-affinity: 0 1 2
+  server-1-cpu-affinity: 0
+  server-2-cpu-affinity: 1
+  xfrd-cpu-affinity: 2
+```
+
+**Configuration breakdown:**
+- `cpu-affinity`: Lists all cores designated for NSD
+- `server-N-cpu-affinity`: Binds each server process to a specific core
+- `xfrd-cpu-affinity`: Binds the zone transfer daemon to a dedicated core
+
+<Tip>
+**Best practices for CPU selection:**
+- Avoid Hyper-Threading cores to prevent resource contention
+- Assign each process to a dedicated physical core
+- Reserve cores exclusively for NSD in high-performance scenarios
+</Tip>
+
+### Platform Support
+
+CPU affinity is currently supported on:
+- Linux
+- FreeBSD
+
+Other platforms may be supported in future releases.
+
+## Socket Partitioning
+
+Assign specific network interfaces to specific server processes to avoid the thundering herd problem and reduce socket scanning overhead.
+
+```text
+server:
+  ip-address: 192.0.2.1 servers=1
+  ip-address: 192.0.2.2 servers=2
+```
+
+Sockets configured with the `servers` parameter are:
+- Only opened by the specified server process
+- Closed by all other servers on startup
+- Isolated from unnecessary wake-ups
+
+## Network Interface Binding
+
+Bind directly to network devices to ensure responses exit through the same interface queries arrive on.
+
+### Linux: bindtodevice
+
+```text
+server:
+  ip-address: 192.0.2.1 bindtodevice=yes
+```
+
+Skips the kernel's network interface selection process, providing:
+- Guaranteed symmetric routing
+- Slight performance improvement
+
+### FreeBSD: setfib
+
+```text
+server:
+  ip-address: 192.0.2.1 setfib=1
+```
+
+Uses a specific routing table (FIB) for the interface.
+
+<Note>
+FreeBSD does not create routing tables on demand. Configure multiple routing tables in the system before using `setfib`. Consult the FreeBSD Handbook for setup instructions.
+</Note>
+
+## Optimal Configuration
+
+Field tests show best performance when combining all tuning options to bind each network interface to a dedicated CPU core.
+
+### Complete High-Performance Example
+
+```text
+server:
+  # Scale to match hardware
+  server-count: 2
+  
+  # CPU pinning
+  cpu-affinity: 0 1 2
+  server-1-cpu-affinity: 0
+  server-2-cpu-affinity: 1
+  xfrd-cpu-affinity: 2
+  
+  # Network interface binding
+  ip-address: 192.0.2.1 servers=1 bindtodevice=yes setfib=1
+  ip-address: 192.0.2.2 servers=2 bindtodevice=yes setfib=2
+  
+  # TCP optimization
+  tcp-count: 1000
+  tcp-timeout: 3
+  tcp-reject-overflow: yes
+  
+  # Socket reuse
+  reuseport: yes
+```
+
+**This configuration:**
+- Binds each IP address to a specific server process
+- Pins each server to a dedicated CPU core
+- Assigns the zone transfer daemon its own core
+- Binds directly to network devices
+- Optimizes TCP handling
+
+<Warning>
+**Important considerations:**
+- The optimal CPU cores, IP addresses, and routing tables depend on your specific hardware and network topology
+- Test extensively in a staging environment before deploying to production
+- Monitor performance metrics to validate improvements
+- Not all optimizations apply to all platforms
+</Warning>
+
+## Testing and Validation
+
+After implementing tuning changes:
+
+1. **Benchmark**: Use DNS query tools to measure queries per second (QPS)
+2. **Monitor CPU**: Check core utilization and context switch rates
+3. **Test routing**: Verify responses use the correct source addresses
+4. **Load test**: Gradually increase traffic to identify bottlenecks
+5. **Compare**: Measure performance before and after tuning
+
+<Tip>
+Document your baseline performance metrics before making changes. This makes it easier to measure the impact of each optimization.
+</Tip>

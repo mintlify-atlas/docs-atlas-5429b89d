@@ -1,0 +1,259 @@
+---
+title: Configuration Overview
+description: Understanding NSD's configuration file structure and format
+---
+
+# Configuration Overview
+
+NSD uses a configuration file, typically `nsd.conf`, to specify all server options, zone configurations, and access controls. The configuration file follows a structured format with multiple top-level sections.
+
+## Configuration File Format
+
+The configuration file uses a simple attribute-value notation:
+
+```conf
+attribute: value
+```
+
+### Basic Rules
+
+- **Comments**: Start with `#` and extend to the end of the line
+- **Whitespace**: Empty lines and leading whitespace are ignored
+- **Quotes**: Use quotes for values containing spaces: `"file name.zone"`
+- **Keywords**: Must have whitespace between them and end with a colon `:`
+
+<Note>
+There must be whitespace between keywords. Attribute keywords end with a colon `:`. An attribute is followed by its containing attributes or a value.
+</Note>
+
+## Top-Level Sections
+
+The configuration file supports seven top-level sections:
+
+| Section | Purpose |
+|---------|----------|
+| `server:` | Global server options and settings |
+| `zone:` | Individual zone configuration |
+| `pattern:` | Reusable zone configuration templates |
+| `key:` | TSIG keys for authentication |
+| `tls-auth:` | TLS authentication for XFR-over-TLS |
+| `remote-control:` | Settings for nsd-control utility |
+| `verify:` | Zone verification options |
+
+### Example Structure
+
+```conf
+# Server configuration
+server:
+    server-count: 1
+    username: nsd
+    logfile: /var/log/nsd.log
+    pidfile: /var/run/nsd.pid
+
+# TSIG key definition
+key:
+    name: "mykey"
+    algorithm: hmac-sha256
+    secret: "K2tf3TRjvQkVCmJF3/Z9vA=="
+
+# Zone pattern
+pattern:
+    name: "myprimary"
+    notify: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.1 NOKEY
+
+# Zone using pattern
+zone:
+    name: example.com
+    zonefile: /etc/nsd/example.com.zone
+    include-pattern: "myprimary"
+```
+
+## Including External Files
+
+You can split your configuration across multiple files using the `include:` directive:
+
+```conf
+include: "/etc/nsd/keys.conf"
+include: "/etc/nsd/zones.d/*.conf"
+```
+
+### Include Features
+
+- Can appear anywhere in the configuration
+- Takes a single filename as an argument
+- Supports wildcard patterns: `*`, `?`, `{}`, `[]`, `~` (see `glob(7)`)
+- If no files match the pattern, this is not an error
+- Processed as if text was copied into the file at that point
+
+<Warning>
+If using `chroot`, include paths must be absolute with the chroot path prepended. The include must be parseable both before and after chroot is applied.
+</Warning>
+
+## Configuration File Validation
+
+Before starting NSD, validate your configuration:
+
+```bash
+nsd-checkconf /etc/nsd/nsd.conf
+```
+
+This command will:
+- Check syntax errors
+- Validate attribute values
+- Report line numbers for any issues
+- Verify zone file paths and permissions
+
+## Dynamic Zone List
+
+NSD maintains a separate zone list file for dynamically added/removed zones:
+
+```conf
+server:
+    zonelistfile: /var/db/nsd/zone.list
+```
+
+This file is managed by `nsd-control` commands:
+- `nsd-control addzone` - Add a zone
+- `nsd-control delzone` - Remove a zone
+- Zones in the main config cannot be deleted via these commands
+
+## Configuration Reloading
+
+NSD supports multiple reload mechanisms:
+
+### Signal-based Reload
+
+```bash
+# Reload changed zone files
+kill -HUP $(cat /var/run/nsd.pid)
+
+# Full reload including config
+kill -SIGHUP $(cat /var/run/nsd.pid)
+```
+
+### nsd-control Commands
+
+```bash
+# Reload zone files only
+nsd-control reload
+
+# Reload configuration and zones
+nsd-control reconfig
+
+# Reload a specific zone
+nsd-control reload example.com
+```
+
+### Automatic Reload
+
+Enable automatic config reload on SIGHUP:
+
+```conf
+server:
+    reload-config: yes
+```
+
+<Accordion title="What happens during a reload?">
+During a reload:
+1. Modified zone files are detected via mtime checks
+2. New zones are loaded into memory
+3. Query processing continues without interruption
+4. Old zone data is replaced atomically
+5. NOTIFY messages are sent for updated primary zones
+
+The reload is designed to be non-disruptive to ongoing queries.
+</Accordion>
+
+## Configuration Examples
+
+### Minimal Configuration
+
+```conf
+server:
+    server-count: 1
+    username: nsd
+    zonelistfile: /var/db/nsd/zone.list
+    logfile: /var/log/nsd.log
+    pidfile: /var/run/nsd.pid
+    xfrdfile: /var/db/nsd/xfrd.state
+
+zone:
+    name: example.com
+    zonefile: /etc/nsd/example.com.zone
+```
+
+### Multi-Server Configuration
+
+```conf
+server:
+    # Use multiple CPU cores
+    server-count: 4
+    
+    # Listen on specific interfaces
+    ip-address: 192.0.2.1
+    ip-address: 2001:db8::1
+    
+    # Performance tuning
+    tcp-count: 200
+    reuseport: yes
+
+zone:
+    name: example.com
+    zonefile: example.com.zone
+```
+
+## Best Practices
+
+<AccordionGroup>
+<Accordion title="Organize with patterns">
+Use patterns to avoid duplicating configuration:
+
+```conf
+pattern:
+    name: "common-secondary"
+    allow-notify: 192.0.2.1 NOKEY
+    request-xfr: 192.0.2.1 NOKEY
+
+zone:
+    name: example1.com
+    include-pattern: "common-secondary"
+    zonefile: example1.com.zone
+
+zone:
+    name: example2.com
+    include-pattern: "common-secondary"
+    zonefile: example2.com.zone
+```
+</Accordion>
+
+<Accordion title="Use includes for secrets">
+Store keys in a separate file with restricted permissions:
+
+```conf
+# nsd.conf
+include: "/etc/nsd/secret.keys"
+
+# secret.keys (mode 600)
+key:
+    name: "tsig-key"
+    algorithm: hmac-sha256
+    secret: "secretvaluehere=="
+```
+</Accordion>
+
+<Accordion title="Set appropriate permissions">
+Recommended file permissions:
+- `nsd.conf`: 644 (readable by all, writable by root)
+- Secret key files: 600 (readable/writable by root only)
+- Zone files: 644 (readable by all)
+- PID file: 644 (created by NSD)
+</Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [Server Options](/configuration/server-options) - Detailed server configuration
+- [Zone Configuration](/configuration/zone-configuration) - Zone-specific settings
+- [Patterns](/configuration/patterns) - Reusable configuration templates
+- [Access Control](/configuration/access-control) - ACL and security settings

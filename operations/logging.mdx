@@ -1,0 +1,425 @@
+---
+title: Logging
+description: Log configuration, verbosity levels, and syslog integration
+---
+
+NSD provides operational logging through syslog and optional log files. NSD does not provide query logging by design - this is delegated to separate tools.
+
+## Logging Philosophy
+
+NSD intentionally does not provide DNS query logging. This decision keeps NSD focused and minimizes complexity. Query logging is better handled by dedicated tools.
+
+<Warning>
+NSD does not log individual DNS queries. If you need query visibility, use external tools like `tcpdump`, `dnstap`, or specialized DNS logging tools.
+</Warning>
+
+## Log Configuration
+
+### Syslog Logging
+
+By default, NSD logs to syslog using the daemon facility:
+
+```yaml
+# nsd.conf
+server:
+    # Logs to syslog daemon facility (default)
+```
+
+Syslog messages appear in:
+- `/var/log/daemon.log` (Debian/Ubuntu)
+- `/var/log/messages` (Red Hat/CentOS)
+- Depends on your syslog configuration
+
+### File Logging
+
+Log to a specific file instead of (or in addition to) syslog:
+
+```yaml
+server:
+    logfile: "/var/log/nsd.log"
+```
+
+Or use command-line option:
+```bash
+nsd -l /var/log/nsd.log
+```
+
+### Foreground Logging
+
+When running in foreground mode, logs go to stderr:
+
+```bash
+nsd -d
+```
+
+Useful for:
+- Debugging
+- Running under systemd
+- Container deployments
+- Development
+
+## Verbosity Levels
+
+Control logging verbosity with the `-V` option or config setting:
+
+```yaml
+server:
+    verbosity: 2
+```
+
+Or command-line:
+```bash
+nsd -V 2
+```
+
+### Verbosity Level Reference
+
+- **0** - Errors and warnings only (default)
+  - Critical errors
+  - Configuration errors
+  - Zone loading failures
+
+- **1** - Basic operational messages
+  - Server start/stop
+  - Zone reloads
+  - AXFR/IXFR completions
+  - Signal handling
+
+- **2** - Detailed operational info
+  - Control connections
+  - Zone transfer attempts
+  - NOTIFY messages
+  - Pattern changes
+
+- **3+** - Debug information
+  - Detailed transfer progress
+  - Socket operations
+  - Internal state changes
+  - Performance tuning info
+
+### Changing Verbosity at Runtime
+
+Change verbosity without restarting:
+
+```bash
+nsd-control verbosity 3
+```
+
+Query current verbosity:
+```bash
+nsd-control verbosity
+```
+Output:
+```
+verbosity 2
+```
+
+Check via status:
+```bash
+nsd-control status
+```
+Output:
+```
+version: 4.x.x
+verbosity: 2
+```
+
+## Log Messages
+
+### Startup Messages
+
+```
+nsd[12345]: nsd starting (NSD 4.x.x)
+nsd[12345]: server started (NSD 4.x.x), pid 12345
+```
+
+### Zone Loading
+
+```
+nsd[12345]: zone example.com read with success
+nsd[12345]: zone example.com serial 2024030801 is updated
+```
+
+### Zone Transfer
+
+```
+nsd[12345]: zone example.com AXFR from 192.0.2.53 started
+nsd[12345]: zone example.com AXFR from 192.0.2.53 done
+nsd[12345]: zone example.com serial 2024030801 received
+```
+
+### NOTIFY Messages
+
+```
+nsd[12345]: notify for example.com from 192.0.2.53 (serial 2024030801)
+nsd[12345]: notify for example.com to 192.0.2.1 (serial 2024030801)
+```
+
+### Errors
+
+```
+nsd[12345]: error: zone example.com file does not exist
+nsd[12345]: error: cannot parse zone example.com: syntax error
+nsd[12345]: error: AXFR for example.com from 192.0.2.53 failed: connection refused
+```
+
+### Signal Handling
+
+```
+nsd[12345]: signal SIGHUP received
+nsd[12345]: signal SIGTERM received, shutting down
+```
+
+## Log Rotation
+
+When using a log file, rotate logs to prevent unlimited growth.
+
+### Using logrotate
+
+Create `/etc/logrotate.d/nsd`:
+
+```
+/var/log/nsd.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    postrotate
+        /usr/sbin/nsd-control log_reopen > /dev/null 2>&1 || true
+    endscript
+}
+```
+
+This configuration:
+- Rotates logs daily
+- Keeps 7 days of logs
+- Compresses old logs
+- Reopens log file after rotation
+
+### Manual Log Rotation
+
+<Steps>
+1. Move the current log file:
+   ```bash
+   mv /var/log/nsd.log /var/log/nsd.log.1
+   ```
+
+2. Reopen the log file:
+   ```bash
+   nsd-control log_reopen
+   ```
+   
+   Or send SIGHUP:
+   ```bash
+   kill -HUP $(cat /var/run/nsd.pid)
+   ```
+
+3. Compress the old log:
+   ```bash
+   gzip /var/log/nsd.log.1
+   ```
+</Steps>
+
+## Chroot Considerations
+
+When running NSD in a chroot:
+
+```bash
+nsd -t /var/nsd/chroot
+```
+
+Ensure syslog socket is available inside the chroot:
+
+```bash
+mkdir -p /var/nsd/chroot/dev
+mknod /var/nsd/chroot/dev/log c 1 3
+```
+
+Or configure syslog to listen on a socket inside the chroot. Without this, NSD won't produce any log output.
+
+<Warning>
+If you chroot NSD, ensure the syslog socket (e.g., `/dev/log`) is available inside the chroot, otherwise NSD will not be able to log.
+</Warning>
+
+## Query Logging Alternatives
+
+Since NSD does not log queries, use these alternatives:
+
+### tcpdump
+
+Capture DNS packets:
+
+```bash
+tcpdump -i eth0 -n port 53
+```
+
+With DNS decoding:
+```bash
+tcpdump -i eth0 -n -s 0 port 53
+```
+
+Save to file:
+```bash
+tcpdump -i eth0 -n -w dns-queries.pcap port 53
+```
+
+### dnstap
+
+NSD supports dnstap for structured query logging:
+
+```yaml
+dnstap:
+    dnstap-enable: yes
+    dnstap-socket-path: "/var/run/dnstap.sock"
+    dnstap-send-identity: yes
+    dnstap-send-version: yes
+    dnstap-log-auth-query-messages: yes
+    dnstap-log-auth-response-messages: yes
+```
+
+Requires:
+- NSD compiled with `--enable-dnstap`
+- dnstap collector running (e.g., `dnstap-ldns`, `golang-dnstap`)
+
+See [DNSTAP Configuration](/reference/configure-options) for details.
+
+### dnsstat (CAIDA)
+
+The CAIDA dnsstat tool provides DNS statistics:
+
+```bash
+dnsstat -i eth0 -r -p 53
+```
+
+Features:
+- Real-time statistics
+- Configurable and modifiable
+- Runs independently of NSD
+- Can run on same machine or separate machine with MAC layer access
+
+More info: https://www.caida.org/catalog/software/dnsstat/
+
+### dnstop
+
+Display DNS statistics in real-time:
+
+```bash
+dnstop -l 3 eth0
+```
+
+Provides:
+- Top queries
+- Query types
+- Response codes
+- Source addresses
+
+More info: http://dns.measurement-factory.com/tools/dnstop/
+
+## Structured Logging with nsd-control
+
+For scripting and monitoring, use `nsd-control` output:
+
+### Statistics Output
+
+```bash
+nsd-control stats
+```
+
+Produces name=value pairs:
+```
+num.queries=12345
+time.boot=1234567890.123
+num.type.A=5000
+num.type.AAAA=3000
+...
+```
+
+Easy to parse with scripts:
+```bash
+nsd-control stats | grep 'num.queries'
+```
+
+### Zone Status Output
+
+```bash
+nsd-control zonestatus example.com
+```
+
+Machine-readable format:
+```
+zone: example.com
+state: ok
+served-serial: "2024030801 since 2024-03-08 10:15:23"
+```
+
+See [Monitoring](/operations/monitoring) for more details.
+
+## Munin Integration
+
+NSD includes a Munin plugin for graphing statistics:
+
+Location: `contrib/nsd_munin_`
+
+The plugin uses `nsd-control stats` output. See the Munin documentation for installation.
+
+GitHub: https://github.com/NLnetLabs/nsd/blob/master/contrib/nsd_munin_
+
+## Debugging
+
+### Increase Verbosity
+
+For troubleshooting, increase verbosity:
+
+```bash
+nsd-control verbosity 3
+```
+
+Or start with high verbosity:
+```bash
+nsd -d -V 3
+```
+
+### Foreground Mode
+
+Run in foreground to see all output:
+
+```bash
+nsd -d -c /etc/nsd/nsd.conf
+```
+
+### Check Configuration
+
+Verify configuration before starting:
+
+```bash
+nsd-checkconf /etc/nsd/nsd.conf
+```
+
+### Test Zone Files
+
+Check zone file syntax:
+
+```bash
+nsd-checkzone example.com /var/nsd/zones/example.com.zone
+```
+
+## Performance Considerations
+
+High verbosity levels can impact performance:
+
+- **Level 0-1**: Minimal overhead
+- **Level 2**: Slight overhead, acceptable for production
+- **Level 3+**: Significant overhead, use only for debugging
+
+<Warning>
+Avoid running production servers with verbosity level 3 or higher. Use it only for short-term debugging.
+</Warning>
+
+## See Also
+
+- [Running NSD](/operations/running-nsd) - Startup and signals
+- [Control Utility](/operations/control-utility) - Runtime control
+- [Monitoring](/operations/monitoring) - Statistics and metrics
+- [Configuration Reference](/reference/nsd-conf) - All config options

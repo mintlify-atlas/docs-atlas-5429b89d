@@ -1,0 +1,665 @@
+---
+title: "Zone Expiry Behavior"
+description: "Understanding zone expiry policies, timers, and handling for secondary zones in NSD"
+---
+
+# Zone Expiry Behavior
+
+NSD implements RFC-compliant zone expiry handling for secondary zones, ensuring that stale data is not served when primary servers become unreachable. This guide explains the technical details of zone expiry timers, state management, and recovery procedures.
+
+## Overview
+
+Secondary zones use SOA record timers to determine when to:
+
+- **Refresh**: Check for zone updates
+- **Retry**: Retry after failed transfer
+- **Expire**: Stop serving the zone if too old
+
+From `doc/manual/running/zone-expiry.rst:3`, NSD tracks zone status according to SOA timing values and takes appropriate action when timers expire.
+
+<Note>
+**Primary zones cannot expire**. They have no `request-xfr` statements and are always served from the local zone file.
+</Note>
+
+## SOA Timers Explained
+
+### SOA Record Structure
+
+```dns
+example.com.  3600  IN  SOA  ns1.example.com. admin.example.com. (
+    2024030801  ; Serial
+    3600        ; Refresh (check for updates every hour)
+    600         ; Retry (retry every 10 minutes on failure)
+    604800      ; Expire (expire after 7 days)
+    86400 )     ; Minimum (negative caching TTL)
+```
+
+### Timer Descriptions
+
+| Timer | Purpose | Typical Value | When Used |
+|-------|---------|---------------|------------|
+| **Refresh** | How often to check for updates | 3600-86400s (1-24h) | While zone is current |
+| **Retry** | How often to retry failed transfers | 600-3600s (10m-1h) | After transfer failure |
+| **Expire** | When to stop serving stale zone | 604800-2419200s (7-28d) | If unreachable for this long |
+| **Minimum** | Negative cache TTL | 300-86400s (5m-24h) | NXDOMAIN responses |
+
+## Zone State Lifecycle
+
+### Normal Operation
+
+```
+[Zone Loaded]
+     |
+     v
+[Wait REFRESH seconds]
+     |
+     v
+[Check SOA serial]
+     |
+     +-- Serial unchanged --> [Wait REFRESH seconds]
+     |
+     +-- Serial increased --> [Transfer zone]
+                                    |
+                                    v
+                              [Update served zone]
+                                    |
+                                    v
+                              [Wait REFRESH seconds]
+```
+
+### Failure Handling
+
+```
+[Transfer fails]
+     |
+     v
+[Wait RETRY seconds]
+     |
+     v
+[Try next primary server]
+     |
+     +-- Success --> [Update zone]
+     |
+     +-- All primaries fail --> [Exponential backoff]
+                                      |
+                                      v
+                                [Wait increased RETRY]
+                                      |
+                                      v
+                                [Eventually: EXPIRE reached]
+                                      |
+                                      v
+                                [Return SERVFAIL]
+```
+
+## State Persistence
+
+From the documentation, NSD stores zone state in `xfrd.state`:
+
+```conf
+server:
+    xfrdfile: "/var/db/nsd/xfrd.state"
+```
+
+### State File Contents
+
+The xfrd.state file contains:
+
+- Zone acquisition timestamps
+- Current serial numbers
+- Retry/refresh timers
+- Expire deadlines
+
+**Example state**:
+```
+# Zone: example.com
+# Last-acquired: 2024-03-08T10:00:00
+# Serial: 2024030801
+# Refresh: 2024-03-08T11:00:00
+# Expire: 2024-03-15T10:00:00
+```
+
+### State File Behavior
+
+From `doc/manual/running/zone-expiry.rst:18`:
+
+> If a secondary zone acquisition time is recent enough, NSD can start serving a zone immediately on loading, without querying the primary server.
+
+This allows NSD to:
+- Start quickly without waiting for zone transfers
+- Continue serving zones across restarts
+- Preserve timer state between runs
+
+## Expired Zone Behavior
+
+### When a Zone Expires
+
+From the documentation:
+
+> After the expire timeout (from the SOA record at the zone apex) is reached, the zone becomes expired. NSD will return SERVFAIL for expired zones.
+
+Behavior when expired:
+
+- **Queries**: Return RCODE=SERVFAIL
+- **Zone transfers**: Not provided to secondaries
+- **Notifies**: Not sent
+- **Background**: NSD continues attempting to transfer the zone
+
+### Automatic Recovery
+
+Once a successful transfer completes or the primary confirms the serial is current:
+
+- Zone returns to operational state
+- SERVFAIL stops
+- Normal query processing resumes
+
+## Configuration
+
+### Basic Secondary Zone
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Secondary configuration
+    request-xfr: AXFR 192.0.2.1 NOKEY
+    allow-notify: 192.0.2.1 NOKEY
+    
+    # SOA timers control expiry behavior
+    # (from zone file SOA record)
+```
+
+### Overriding SOA Timers
+
+You can override SOA timers in the configuration:
+
+<Tabs>
+  <Tab title="Limit Refresh">
+    ```conf
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        request-xfr: AXFR 192.0.2.1 NOKEY
+        allow-notify: 192.0.2.1 NOKEY
+        
+        # Limit refresh to 6 hours minimum
+        min-refresh-time: 21600
+        
+        # Limit refresh to 24 hours maximum
+        max-refresh-time: 86400
+    ```
+    
+    Useful for zones with unrealistic SOA refresh values.
+  </Tab>
+  
+  <Tab title="Limit Retry">
+    ```conf
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        request-xfr: AXFR 192.0.2.1 NOKEY
+        allow-notify: 192.0.2.1 NOKEY
+        
+        # Retry at least every 10 minutes
+        min-retry-time: 600
+        
+        # Retry at most every 2 hours
+        max-retry-time: 7200
+    ```
+    
+    Prevents excessive retries or too-infrequent attempts.
+  </Tab>
+  
+  <Tab title="Limit Expire">
+    ```conf
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        request-xfr: AXFR 192.0.2.1 NOKEY
+        allow-notify: 192.0.2.1 NOKEY
+        
+        # Expire after at least refresh + retry + 1 second
+        min-expire-time: refresh+retry+1
+        
+        # Or use explicit time (7 days)
+        # min-expire-time: 604800
+    ```
+    
+    Ensures zone doesn't expire too quickly.
+  </Tab>
+  
+  <Tab title="All Limits">
+    ```conf
+    zone:
+        name: "example.com"
+        zonefile: "/var/nsd/zones/example.com.zone"
+        
+        request-xfr: AXFR 192.0.2.1 NOKEY
+        allow-notify: 192.0.2.1 NOKEY
+        
+        # Constrain all timers
+        min-refresh-time: 3600      # 1 hour
+        max-refresh-time: 86400     # 24 hours
+        min-retry-time: 600         # 10 minutes
+        max-retry-time: 7200        # 2 hours
+        min-expire-time: 604800     # 7 days
+    ```
+  </Tab>
+</Tabs>
+
+### Multiple Primary Servers
+
+NSD tries each primary server in turn:
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Try primary1 first
+    request-xfr: AXFR 192.0.2.1 NOKEY
+    allow-notify: 192.0.2.1 NOKEY
+    
+    # Fall back to primary2
+    request-xfr: AXFR 192.0.2.2 NOKEY
+    allow-notify: 192.0.2.2 NOKEY
+    
+    # Fall back to primary3
+    request-xfr: AXFR 192.0.2.3 NOKEY
+    allow-notify: 192.0.2.3 NOKEY
+```
+
+NSD rotates through primaries on each retry.
+
+### Multi-Primary with Version Check
+
+<Warning>
+If you have multiple primaries with different serial numbers (for instance, during a rolling update), use:
+</Warning>
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    request-xfr: AXFR 192.0.2.1 NOKEY
+    request-xfr: AXFR 192.0.2.2 NOKEY
+    request-xfr: AXFR 192.0.2.3 NOKEY
+    
+    # Check all primaries and use highest serial
+    multi-primary-check: yes
+```
+
+This ensures you get the latest version when primaries have different serials.
+
+## Manual Zone Recovery
+
+### Force Unexpire a Zone
+
+From the documentation:
+
+> If a secondary zone has expired and no primaries can be reached, but NSD should still serve the zone, delete the xfrd.state file, but leave the zone file intact.
+
+<Steps>
+
+### Stop NSD
+
+```bash
+systemctl stop nsd
+```
+
+**Important**: Stop NSD first, as it writes xfrd.state on exit.
+
+### Delete State File
+
+```bash
+# Remove state file
+rm /var/db/nsd/xfrd.state
+
+# Keep zone files!
+ls -la /var/nsd/zones/
+```
+
+### Start NSD
+
+```bash
+systemctl start nsd
+```
+
+NSD will:
+- Treat zone files as fresh/current
+- Serve the zones immediately
+- Start refresh timers from now
+- Still attempt to contact primaries
+
+</Steps>
+
+<Warning>
+**Use with caution**: This forces NSD to serve potentially stale data. The zone will expire again after the SOA expire time unless primaries become reachable.
+</Warning>
+
+### Provide Fresh Zone File
+
+Alternatively, provide an updated zone file:
+
+<Steps>
+
+### Obtain Current Zone
+
+```bash
+# Transfer zone from working primary to file
+dig @working-primary.example.com example.com AXFR > example.com.zone
+
+# Or use nsd-zone-copy if available
+# Or rsync from another secondary
+```
+
+### Install Zone File
+
+```bash
+# Copy to NSD zones directory
+cp example.com.zone /var/nsd/zones/
+chown nsd:nsd /var/nsd/zones/example.com.zone
+chmod 640 /var/nsd/zones/example.com.zone
+```
+
+### Reload Zone
+
+```bash
+# Reload specific zone
+nsd-control reload example.com
+
+# Or reload all zones
+nsd-control reload
+```
+
+</Steps>
+
+From the documentation:
+
+> When this is done the new zone will be served. For secondary zones NSD attempts to validate the zone from the primary (checking its SOA serial number).
+
+## Monitoring Zone Expiry
+
+### Check Zone Status
+
+```bash
+# View all zone statuses
+nsd-control zonestatus
+
+# Output includes expiry information:
+# zone:   example.com
+#     state: ok
+#     served-serial: "2024030801 since 2024-03-08T10:00:00"
+#     commit-serial: "2024030801 since 2024-03-08T10:00:00"
+#     wait: "3461 sec between attempts"
+```
+
+### Check Specific Zone
+
+```bash
+# Single zone status
+nsd-control zonestatus example.com
+
+# States can be:
+# - ok: Zone is current and served
+# - expired: Zone has expired (SERVFAIL)
+# - waiting: Zone is waiting for refresh
+```
+
+### Monitoring for Expired Zones
+
+```bash
+# Script to alert on expired zones
+#!/bin/bash
+
+EXPIRED=$(nsd-control zonestatus | grep -A1 "zone:" | grep "state: expired")
+
+if [ -n "$EXPIRED" ]; then
+    echo "WARNING: Expired zones detected!"
+    nsd-control zonestatus | grep -B1 "state: expired"
+    exit 1
+fi
+
+exit 0
+```
+
+### Logging Expiry Events
+
+Enable logging to track expiry issues:
+
+```conf
+server:
+    # Verbosity 1: Logs zone transfer failures and updates
+    verbosity: 1
+    
+    # Log to file for analysis
+    logfile: "/var/log/nsd.log"
+```
+
+Log messages for expiry:
+```
+[timestamp] nsd[pid]: zone example.com: transfer failed, retry 600 sec
+[timestamp] nsd[pid]: zone example.com: expired, returning SERVFAIL
+[timestamp] nsd[pid]: zone example.com: transfer succeeded, serial 2024030802
+```
+
+## Advanced Scenarios
+
+### Disabling State Persistence
+
+To force fresh checks on every startup:
+
+```conf
+server:
+    # Disable state file
+    xfrdfile: ""
+```
+
+With an empty string:
+- No state is persisted
+- All secondary zones are checked for updates on startup
+- Slower startup
+- No timer preservation across restarts
+
+### Zone File Updates for Secondaries
+
+From the documentation:
+
+> It is possible to provide zone files for both primary and secondary zones via alternative means (say from email or rsync).
+
+<Steps>
+
+### Place Updated Zone File
+
+```bash
+# Copy new zone file
+cp updated-example.com.zone /var/nsd/zones/example.com.zone
+```
+
+### Reload Zone
+
+```bash
+# Reload the zone
+nsd-control reload example.com
+```
+
+### What Happens
+
+For **secondary zones**:
+- NSD loads the new zone file
+- Serves the updated zone immediately
+- Attempts to validate from primary (checks SOA serial)
+- Updates state if primary confirms
+
+</Steps>
+
+### Hidden Primary Configuration
+
+For primary-secondary setups with hidden primary:
+
+```conf
+# On secondary
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Primary is hidden (internal IP)
+    request-xfr: AXFR 10.0.0.1 transfer-key
+    allow-notify: 10.0.0.1 transfer-key
+    
+    # Increase expire time for reliability
+    min-expire-time: 2419200  # 28 days
+```
+
+Longer expire times give more time to fix connectivity issues.
+
+## Troubleshooting
+
+<Accordion title="Zone Expired Unexpectedly">
+  **Symptom**: Zone returns SERVFAIL, logs show "expired"
+
+  **Diagnosis**:
+  ```bash
+  # Check zone status
+  nsd-control zonestatus example.com
+  
+  # Check primary reachability
+  dig @192.0.2.1 example.com SOA
+  
+  # Check logs
+  journalctl -u nsd | grep example.com
+  ```
+
+  **Common Causes**:
+  - Primary server unreachable (firewall, network issue)
+  - TSIG key mismatch
+  - Primary server misconfigured
+  - SOA expire time too short
+
+  **Solutions**:
+  1. Fix primary server connectivity
+  2. Or increase `min-expire-time` in configuration
+  3. Or manually recover zone (see above)
+</Accordion>
+
+<Accordion title="Zone Not Refreshing">
+  **Symptom**: Zone becomes stale but doesn't expire
+
+  **Diagnosis**:
+  ```bash
+  # Check current serial
+  dig @localhost example.com SOA
+  
+  # Check primary serial
+  dig @192.0.2.1 example.com SOA
+  
+  # Check status
+  nsd-control zonestatus example.com
+  ```
+
+  **Common Causes**:
+  - Serial number on primary is lower (rollback)
+  - NOTIFY not being received
+  - Refresh timer very long
+
+  **Solutions**:
+  ```bash
+  # Force immediate transfer
+  nsd-control transfer example.com
+  
+  # Check if NOTIFY reaches secondary
+  tcpdump -i eth0 port 53 and host 192.0.2.1
+  ```
+</Accordion>
+
+<Accordion title="Excessive Retry Attempts">
+  **Symptom**: Logs filled with transfer retry messages
+
+  **Cause**: Primary unreachable, but retry time very short
+
+  **Solution**:
+  ```conf
+  zone:
+      name: "example.com"
+      zonefile: "/var/nsd/zones/example.com.zone"
+      
+      request-xfr: AXFR 192.0.2.1 NOKEY
+      allow-notify: 192.0.2.1 NOKEY
+      
+      # Increase minimum retry to reduce log spam
+      min-retry-time: 3600  # 1 hour
+      
+      # Cap maximum retry
+      max-retry-time: 86400  # 24 hours
+  ```
+</Accordion>
+
+## Best Practices
+
+### SOA Timer Recommendations
+
+For most zones:
+
+```dns
+example.com.  3600  IN  SOA  ns1.example.com. admin.example.com. (
+    2024030801  ; Serial
+    7200        ; Refresh: 2 hours
+    900         ; Retry: 15 minutes
+    1209600     ; Expire: 14 days
+    3600 )      ; Minimum: 1 hour
+```
+
+- **Refresh**: 1-6 hours (balance freshness vs load)
+- **Retry**: 10-30 minutes (quick recovery from transient failures)
+- **Expire**: 7-28 days (long enough for extended outages)
+- **Minimum**: 1-2 hours (negative caching)
+
+### Configuration Recommendations
+
+1. **Use multiple primary servers** for redundancy
+2. **Enable NOTIFY** for immediate updates
+3. **Use IXFR** for bandwidth efficiency
+4. **Set reasonable expire times** (14+ days for production)
+5. **Monitor zone status** regularly
+6. **Keep xfrd.state backed up** (optional)
+
+### High-Availability Setup
+
+```conf
+zone:
+    name: "example.com"
+    zonefile: "/var/nsd/zones/example.com.zone"
+    
+    # Multiple diverse primaries
+    request-xfr: AXFR 192.0.2.1 transfer-key  # Primary datacenter
+    request-xfr: AXFR 198.51.100.1 transfer-key  # Backup datacenter
+    request-xfr: AXFR 203.0.113.1 transfer-key  # Cloud instance
+    
+    allow-notify: 192.0.2.1 transfer-key
+    allow-notify: 198.51.100.1 transfer-key
+    allow-notify: 203.0.113.1 transfer-key
+    
+    # Ensure all primaries are checked
+    multi-primary-check: yes
+    
+    # Long expire time for reliability
+    min-expire-time: 2419200  # 28 days
+    
+    # Reasonable refresh/retry
+    min-refresh-time: 3600
+    max-refresh-time: 21600
+    min-retry-time: 900
+    max-retry-time: 7200
+```
+
+## Related Topics
+
+- [Zone Transfers](/operations/zone-transfers) - AXFR and IXFR details
+- [TSIG Authentication](/advanced/tsig) - Secure transfers
+- [Catalog Zones](/advanced/catalog-zones) - Automated provisioning
+- [Monitoring](/operations/monitoring) - Zone status monitoring

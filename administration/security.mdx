@@ -1,0 +1,394 @@
+---
+title: Security
+description: Secure NSD with privilege separation, chroot, ACLs, and TSIG authentication
+---
+
+NSD includes multiple security features to minimize risk and protect your DNS infrastructure. This guide covers privilege separation, access control, and authentication mechanisms.
+
+## Privilege Separation
+
+NSD can drop root privileges after binding to port 53, running as an unprivileged user for normal operations.
+
+### Running as Unprivileged User
+
+```text
+server:
+  username: nsd
+```
+
+**Security benefits:**
+- Limits damage if NSD is compromised
+- Follows principle of least privilege
+- Prevents unauthorized system access
+
+**Setup steps:**
+
+1. Create dedicated user:
+```bash
+sudo useradd -r -s /bin/false -d /var/lib/nsd nsd
+```
+
+2. Set file ownership:
+```bash
+sudo chown -R nsd:nsd /var/lib/nsd
+sudo chown -R nsd:nsd /etc/nsd
+```
+
+3. Verify permissions:
+```bash
+ls -la /var/lib/nsd
+ls -la /etc/nsd
+```
+
+<Tip>
+Always run NSD as an unprivileged user in production. Set `username: ""` only in development environments where privilege separation isn't needed.
+</Tip>
+
+## Chroot Jail
+
+Confine NSD to a specific directory to limit filesystem access.
+
+```text
+server:
+  username: nsd
+  chroot: "/var/lib/nsd"
+  zonesdir: "/zones"
+  logfile: "/var/log/nsd.log"
+  pidfile: "/var/run/nsd.pid"
+```
+
+**How chroot works:**
+- NSD's view of the filesystem is restricted to `/var/lib/nsd`
+- Paths become relative to the chroot directory
+- Zone files at `/var/lib/nsd/zones/example.com.zone` appear as `/zones/example.com.zone` to NSD
+
+### Chroot Setup
+
+1. **Create directory structure:**
+```bash
+sudo mkdir -p /var/lib/nsd/{zones,var/run,var/log}
+```
+
+2. **Copy necessary files:**
+```bash
+# If NSD needs to resolve hostnames
+sudo cp /etc/resolv.conf /var/lib/nsd/etc/
+sudo cp /etc/hosts /var/lib/nsd/etc/
+```
+
+3. **Set permissions:**
+```bash
+sudo chown -R nsd:nsd /var/lib/nsd
+sudo chmod 755 /var/lib/nsd
+```
+
+4. **Adjust paths in config:**
+```text
+server:
+  chroot: "/var/lib/nsd"
+  pidfile: "/var/run/nsd.pid"      # Relative to chroot
+  logfile: "/var/log/nsd.log"      # Relative to chroot
+  database: "/nsd.db"              # Relative to chroot
+  xfrdfile: "/xfrd.state"          # Relative to chroot
+  zonesdir: "/zones"               # Relative to chroot
+```
+
+<Warning>
+**Chroot considerations:**
+- All file paths must be accessible within the chroot directory
+- Remote control certificates must be inside the chroot
+- Updating zone files requires placing them in the chroot
+- Some features (like file includes) may need adjustment
+</Warning>
+
+## Access Control Lists (ACLs)
+
+Control which clients can perform zone transfers and receive notifications.
+
+### Zone Transfer ACLs
+
+Restrict AXFR/IXFR access to authorized secondaries:
+
+```text
+zone:
+  name: "example.com"
+  zonefile: "example.com.zone"
+  
+  # Allow single IP
+  provide-xfr: 192.0.2.1 NOKEY
+  
+  # Allow subnet
+  provide-xfr: 198.51.100.0/24 NOKEY
+  
+  # IPv6
+  provide-xfr: 2001:db8::/32 NOKEY
+```
+
+### Notification ACLs
+
+Control which servers can send NOTIFY messages:
+
+```text
+zone:
+  name: "example.com"
+  zonefile: "example.com.zone"
+  
+  # Only accept notifications from primary
+  allow-notify: 192.0.2.1 NOKEY
+  allow-notify: 2001:db8::1 NOKEY
+```
+
+<Warning>
+**Never use NOKEY in production!**  
+The examples above use `NOKEY` for illustration only. Always use TSIG authentication for zone transfers and notifications in production environments.
+</Warning>
+
+## TSIG Authentication
+
+Transaction Signature (TSIG) provides cryptographic authentication for zone transfers and notifications.
+
+### Creating TSIG Keys
+
+Generate a shared secret:
+
+```bash
+# Using tsig-keygen (BIND 9.13+)
+tsig-keygen example-key
+
+# Using older ddns-confgen
+ddns-confgen -a hmac-sha256 -k example-key
+```
+
+Example output:
+```text
+key "example-key" {
+  algorithm hmac-sha256;
+  secret "K7R3JqkqF4wE8mVxL2+yQ3hN5tB9pW1cX6vU0zA==";
+};
+```
+
+### Configuring TSIG Keys
+
+Add the key to NSD configuration:
+
+```text
+key:
+  name: "example-key"
+  algorithm: hmac-sha256
+  secret: "K7R3JqkqF4wE8mVxL2+yQ3hN5tB9pW1cX6vU0zA=="
+```
+
+**Supported algorithms:**
+- `hmac-md5` (legacy, not recommended)
+- `hmac-sha1`
+- `hmac-sha256` (recommended)
+- `hmac-sha384`
+- `hmac-sha512`
+
+<Tip>
+Store TSIG keys in a separate file with restricted permissions:
+
+```text
+# nsd.conf
+include: "/etc/nsd/keys.conf"
+```
+
+```bash
+sudo chmod 600 /etc/nsd/keys.conf
+sudo chown nsd:nsd /etc/nsd/keys.conf
+```
+</Tip>
+
+### Using TSIG for Zone Transfers
+
+**Primary server configuration:**
+
+```text
+key:
+  name: "transfer-key"
+  algorithm: hmac-sha256
+  secret: "your-secret-here"
+
+zone:
+  name: "example.com"
+  zonefile: "example.com.zone"
+  
+  # Require TSIG for transfers
+  provide-xfr: 192.0.2.10 transfer-key
+  
+  # Send signed notifications
+  notify: 192.0.2.10 transfer-key
+```
+
+**Secondary server configuration:**
+
+```text
+key:
+  name: "transfer-key"
+  algorithm: hmac-sha256
+  secret: "your-secret-here"
+
+zone:
+  name: "example.com"
+  zonefile: "example.com.zone"
+  
+  # Only accept signed notifications
+  allow-notify: 192.0.2.1 transfer-key
+  
+  # Use TSIG for transfer requests
+  request-xfr: 192.0.2.1 transfer-key
+```
+
+### TSIG for Any Query
+
+TSIG keys authenticate all queries, not just zone transfers:
+
+```text
+key:
+  name: "query-key"
+  algorithm: hmac-sha256
+  secret: "another-secret-here"
+```
+
+When a client sends a TSIG-signed query:
+- NSD validates the signature
+- If valid, returns a signed response
+- If invalid, refuses the query
+- Unsigned queries receive unsigned responses
+
+## TLS Certificates for Remote Control
+
+The `nsd-control` utility uses TLS for encrypted communication.
+
+### Generating Certificates
+
+```bash
+sudo nsd-control-setup
+```
+
+Creates:
+- `/etc/nsd/nsd_server.key` - Server private key
+- `/etc/nsd/nsd_server.pem` - Server certificate
+- `/etc/nsd/nsd_control.key` - Client private key
+- `/etc/nsd/nsd_control.pem` - Client certificate
+
+### Remote Control Configuration
+
+```text
+remote-control:
+  control-enable: yes
+  control-interface: 127.0.0.1
+  
+  # Certificate locations
+  server-key-file: "/etc/nsd/nsd_server.key"
+  server-cert-file: "/etc/nsd/nsd_server.pem"
+  control-key-file: "/etc/nsd/nsd_control.key"
+  control-cert-file: "/etc/nsd/nsd_control.pem"
+```
+
+<Warning>
+**Certificate security:**
+- Never share private keys
+- Restrict file permissions: `chmod 600 /etc/nsd/*.key`
+- Keep certificates inside chroot if using chroot
+- Rotate certificates periodically
+</Warning>
+
+### Remote Administration
+
+For remote administration over the network:
+
+```text
+remote-control:
+  control-enable: yes
+  control-interface: 192.0.2.1  # Public IP
+```
+
+**Client setup:**
+
+1. Copy certificates to remote host:
+```bash
+scp /etc/nsd/nsd_server.pem remote-host:/etc/nsd/
+scp /etc/nsd/nsd_control.* remote-host:/etc/nsd/
+```
+
+2. Create client config:
+```text
+remote-control:
+  control-enable: yes
+  control-interface: 192.0.2.1
+  server-cert-file: "/etc/nsd/nsd_server.pem"
+  control-key-file: "/etc/nsd/nsd_control.key"
+  control-cert-file: "/etc/nsd/nsd_control.pem"
+```
+
+3. Use with config file:
+```bash
+nsd-control -c /path/to/client-config.conf status
+```
+
+## Complete Security Example
+
+```text
+server:
+  # Privilege separation
+  username: nsd
+  chroot: "/var/lib/nsd"
+  
+  # File paths (relative to chroot)
+  pidfile: "/var/run/nsd.pid"
+  logfile: "/var/log/nsd.log"
+  database: "/nsd.db"
+  zonesdir: "/zones"
+
+remote-control:
+  control-enable: yes
+  control-interface: 127.0.0.1
+  server-key-file: "/etc/nsd_server.key"
+  server-cert-file: "/etc/nsd_server.pem"
+  control-key-file: "/etc/nsd_control.key"
+  control-cert-file: "/etc/nsd_control.pem"
+
+key:
+  name: "transfer-key"
+  algorithm: hmac-sha256
+  secret: "your-secret-here"
+
+zone:
+  name: "example.com"
+  zonefile: "example.com.zone"
+  
+  # TSIG-authenticated transfers only
+  provide-xfr: 192.0.2.10/32 transfer-key
+  allow-notify: 192.0.2.1/32 transfer-key
+  notify: 192.0.2.10 transfer-key
+```
+
+## Security Best Practices
+
+<Tip>
+**Essential security measures:**
+
+1. **Always run as unprivileged user** - Set `username: nsd`
+2. **Use chroot in production** - Limit filesystem access
+3. **Never use NOKEY** - Always authenticate with TSIG
+4. **Restrict ACLs tightly** - Use specific IPs, not broad subnets
+5. **Use hmac-sha256** - Avoid legacy hmac-md5
+6. **Protect key files** - Set permissions to 600
+7. **Rotate TSIG keys** - Update periodically
+8. **Limit remote-control** - Bind to 127.0.0.1 unless remote access needed
+9. **Monitor logs** - Watch for unauthorized access attempts
+10. **Keep NSD updated** - Apply security patches promptly
+</Tip>
+
+## Vulnerability Reporting
+
+To report security vulnerabilities in NSD:
+
+- Send encrypted messages to NLnet Labs Security Entry Point
+- Details: https://www.nlnetlabs.nl/security-report/
+- Security policy: https://www.nlnetlabs.nl/support/software-support-policy/
+
+<Note>
+NLnet Labs supports the latest release with security fixes. Older versions do not receive backported patches. Always run the most recent version of NSD.
+</Note>

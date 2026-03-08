@@ -1,0 +1,170 @@
+---
+title: RFC Compliance
+description: Standards and RFCs implemented in NSD
+---
+
+NSD strives to be a reference implementation for emerging standards in the Internet Engineering Task Force (IETF). The aim is to implement well-established Internet Drafts as a compile option and drafts in the final stage of open community review as an optional feature, that is disabled by default. Accepted RFCs are implemented in NSD according to the described standard.
+
+## Implemented RFCs
+
+The following table provides an extensive overview of all the RFC standards and Internet drafts that have been implemented in NSD.
+
+<Accordion title="Core DNS Protocol RFCs">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 1034 | Domain Names – Concepts and Facilities |
+| RFC 1035 | Domain Names – Implementation and Specification |
+| RFC 2181 | Clarifications to the DNS Specification |
+| RFC 4343 | Domain Name System (DNS) Case Insensitivity Clarification |
+| RFC 4592 | The Role of Wildcards in the Domain Name System |
+
+</Accordion>
+
+<Accordion title="DNS Extensions (EDNS)">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 2671 | Extension Mechanisms for DNS (EDNS0) |
+| RFC 3225 | Indicating Resolver Support of DNSSEC |
+| RFC 6891 | Extension Mechanisms for DNS (EDNS(0)) |
+| RFC 8914 | Extended DNS Errors |
+
+</Accordion>
+
+<Accordion title="Zone Transfer & Notification">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 1995 | Incremental Zone Transfer in DNS |
+| RFC 1996 | A Mechanism for Prompt Notification of Zone Changes (DNS NOTIFY) |
+| RFC 5936 | DNS Zone Transfer Protocol (AXFR) |
+| RFC 9103 | DNS Zone Transfer over TLS |
+
+</Accordion>
+
+<Accordion title="DNSSEC RFCs">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 2535 | Domain Name System Security Extensions |
+| RFC 2536 | DSA KEYs and SIGs in the Domain Name System (DNS) |
+| RFC 2537 | RSA/MD5 KEYs and SIGs in the Domain Name System (DNS) |
+| RFC 3110 | RSA/SHA-1 SIGs and RSA KEYs in the Domain Name System (DNS) |
+| RFC 3755 | Legacy Resolver Compatibility for Delegation Signer (DS) |
+| RFC 4033 | DNS Security Introduction and Requirements |
+| RFC 4034 | Resource Records for the DNS Security Extensions |
+| RFC 4035 | Protocol Modifications for the DNS Security Extensions |
+| RFC 4431 | The DNSSEC Lookaside Validation (DLV) DNS Resource Record |
+| RFC 4509 | Use of SHA-256 in DNSSEC Delegation Signer (DS) Resource Records (RRs) |
+| RFC 5155 | DNS Security (DNSSEC) Hashed Authenticated Denial of Existence |
+| RFC 5702 | Use of SHA-2 Algorithms with RSA in DNSKEY and RRSIG Resource Records for DNSSEC |
+| RFC 5933 | Use of GOST Signature Algorithms in DNSKEY and RRSIG Resource Records for DNSSEC |
+| RFC 6605 | Elliptic Curve Digital Signature Algorithm (DSA) for DNSSEC |
+| RFC 6725 | DNS Security (DNSSEC) DNSKEY Algorithm IANA Registry Updates |
+| RFC 6840 | Clarifications and Implementation Notes for DNS Security (DNSSEC) |
+| RFC 7344 | Automating DNSSEC Delegation Trust Maintenance |
+| RFC 7477 | Child-to-Parent Synchronization in DNS |
+| RFC 8080 | Edwards-Curve Digital Security Algorithm (EdDSA) for DNSSEC |
+
+</Accordion>
+
+<Accordion title="Resource Record Types">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 1101 | DNS Encoding of Network Names and Other Types |
+| RFC 1706 | DNS NSAP Resource Records |
+| RFC 1712 | DNS Encoding of Geographical Location |
+| RFC 1876 | A Means for Expressing Location Information in the Domain Name System |
+| RFC 2163 | Using the Internet DNS to Distribute MIXER Conformant Global Address Mapping (MCGAM) |
+| RFC 2168 | Resolution of Uniform Resource Identifiers using the Domain Name System |
+| RFC 2230 | Key Exchange Delegation Record for the DNS |
+| RFC 2538 | Storing Certificates in the Domain Name System (DNS) |
+| RFC 2539 | Storage of Diffie-Hellman Keys in the Domain Name System (DNS) |
+| RFC 2672 | Non-Terminal DNS Name Redirection |
+| RFC 2782 | A DNS RR for specifying the location of services (DNS SRV) |
+| RFC 2874 | DNS Extensions to Support IPv6 Address Aggregation and Renumbering |
+| RFC 2915 | The Naming Authority Pointer (NAPTR) DNS Resource Record |
+| RFC 2930 | Secret Key Establishment for DNS (TKEY RR) |
+| RFC 3123 | A DNS RR Type for Lists of Address Prefixes (APL RR) |
+| RFC 3597 | Handling of Unknown DNS Resource Record (RR) Types |
+| RFC 4025 | A Method for Storing IPsec Keying Material in DNS |
+| RFC 4255 | Using DNS to Securely Publish Secure Shell (SSH) Key Fingerprints |
+| RFC 4398 | Storing Certificates in the Domain Name System (DNS) |
+| RFC 4701 | A DNS Resource Record (RR) for Encoding Dynamic Host Configuration Protocol (DHCP) Information (DHCID RR) |
+| RFC 5205 | Host Identity Protocol (HIP) Domain Name System (DNS) Extension |
+| RFC 6672 | DNAME Redirection in the DNS |
+| RFC 6698 | The DNS-Based Authentication of Named Entities (DANE) Transport Layer Security (TLS) Protocol: TLSA |
+| RFC 6742 | DNS Resource Records for the Identifier-Locator Network Protocol (ILNP) |
+| RFC 6844 | DNS Certification Authority Authorization (CAA) Resource Record |
+| RFC 7043 | Resource Records for EUI-48 and EUI-64 Addresses in the DNS |
+| RFC 7553 | The Uniform Resource Identifier (URI) DNS Resource Record |
+| RFC 7929 | DNS-Based Authentication of Named Entities (DANE) Bindings for OpenPGP |
+| RFC 8162 | Using Secure DNS to Associate Certificates with Domain Names for S/MIME |
+
+</Accordion>
+
+<Accordion title="Authentication & Security">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 2845 | Secret Key Transaction Authentication for DNS (TSIG) |
+| RFC 4635 | HMAC SHA TSIG Algorithm Identifiers |
+| RFC 5001 | DNS Name Server Identifier (NSID) Option |
+| RFC 7873 | Domain Name System (DNS) Cookies |
+| RFC 8945 | Secret Key Transaction Authentication for DNS (TSIG) |
+| RFC 9018 | Interoperable Domain Name System (DNS) Server Cookies |
+
+</Accordion>
+
+<Accordion title="Transport & Operational Requirements">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 1982 | Serial Number Arithmetic |
+| RFC 2308 | Negative Caching of DNS Queries (DNS NCACHE) |
+| RFC 2606 | Reserved Top Level DNS Names |
+| RFC 2673 | Binary Labels in the Domain Name System |
+| RFC 6761 | Special-Use Domain Names |
+| RFC 7766 | DNS Transport over TCP - Implementation Requirements |
+| RFC 9210 | DNS Transport over TCP - Operational Requirements |
+
+</Accordion>
+
+<Accordion title="Special Features">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 4892 | Requirements for a Mechanism Identifying a Name Server Instance |
+| RFC 6604 | xNAME RCODE and Status Bits Clarification |
+| RFC 6895 | Domain Name System (DNS) IANA Considerations |
+| RFC 8482 | Providing Minimal-Sized Responses to DNS Queries That Have QTYPE=ANY |
+| RFC 9432 | DNS Catalog Zones |
+
+</Accordion>
+
+<Accordion title="MIME & Encoding">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 1521 | MIME (Multipurpose Internet Mail Extensions) Part One: Mechanisms for Specifying and Describing the Format of Internet Message Bodies |
+| RFC 2253 | Lightweight Directory Access Protocol (v3): UTF-8 String Representation of Distinguished Names |
+
+</Accordion>
+
+<Accordion title="Cryptographic Algorithms">
+
+| RFC | Description |
+|-----|-------------|
+| RFC 5114 | Additional Diffie-Hellman Groups for Use with IETF Standards |
+| RFC 4597 | Conferencing Scenarios |
+
+</Accordion>
+
+## Compliance Notes
+
+- NSD implements authoritative DNS server functionality according to these standards
+- DNSSEC support requires OpenSSL 0.9.7 or higher
+- Some advanced features may need to be enabled at compile time
+- Internet Drafts in final stages may be available as experimental features

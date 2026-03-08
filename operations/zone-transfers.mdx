@@ -1,0 +1,575 @@
+---
+title: Zone Transfers
+description: AXFR, IXFR, and zone transfer management
+---
+
+NSD supports both AXFR (full zone transfer) and IXFR (incremental zone transfer) for secondary zones. This page covers transfer commands, monitoring, and NOTIFY handling.
+
+## Zone Transfer Types
+
+### AXFR (Full Transfer)
+
+A complete zone transfer that transmits the entire zone:
+- Used for initial zone loading
+- Used when IXFR is not available
+- Transfers all records in the zone
+- More bandwidth intensive
+
+### IXFR (Incremental Transfer)
+
+Transfers only the changes since the last update:
+- Requires zone serial number tracking
+- More efficient for large zones with small changes
+- Falls back to AXFR if changes are too large
+- Requires IXFR support on both primary and secondary
+
+## Transfer Commands
+
+### transfer
+
+Attempt to update secondary zones by contacting primaries:
+
+```bash
+nsd-control transfer [zone]
+```
+
+Without argument: attempts transfer for all secondary zones  
+With argument: attempts transfer for specified zone only
+
+Examples:
+```bash
+# Update all secondary zones
+nsd-control transfer
+
+# Update specific zone
+nsd-control transfer example.com
+```
+
+Output:
+```
+ok
+```
+
+The command:
+1. Contacts the primaries configured via `request-xfr` lists
+2. Checks if zone serial has increased
+3. Performs IXFR if available, otherwise AXFR
+4. Resets backoff timeout if the zone had no content
+
+<Warning>
+Normally NSD receives a NOTIFY from the primary (configured via `allow-notify` ACL) when a new zone serial is available. The `transfer` command is useful for:
+- Manual synchronization
+- Recovering from missed NOTIFYs
+- Resetting exponential backoff after primary was down
+</Warning>
+
+### force_transfer
+
+Force a full AXFR even if serial numbers match:
+
+```bash
+nsd-control force_transfer [zone]
+```
+
+Without argument: forces transfer for all secondary zones  
+With argument: forces transfer for specified zone only
+
+Examples:
+```bash
+# Force update all zones
+nsd-control force_transfer
+
+# Force update specific zone
+nsd-control force_transfer example.com
+```
+
+Output:
+```
+ok, 5 zones
+```
+
+This command:
+1. Performs a full AXFR regardless of serial number
+2. Useful if zone content is suspect but serial is unchanged
+3. Interrupts any ongoing transfers
+
+<Warning>
+Use `transfer` if you want IXFR and serial number checking. Use `force_transfer` only when you need to reload the entire zone unconditionally.
+</Warning>
+
+## NOTIFY Handling
+
+### notify
+
+Send NOTIFY messages to secondary servers:
+
+```bash
+nsd-control notify [zone]
+```
+
+Without argument: sends NOTIFYs for all primary zones  
+With argument: sends NOTIFY for specified zone only
+
+Examples:
+```bash
+# Notify secondaries of all zones
+nsd-control notify
+
+# Notify secondaries of specific zone
+nsd-control notify example.com
+```
+
+The command:
+1. Sends to IP addresses configured in `notify:` lists
+2. Only applies to primary zones hosted on this server
+3. Secondaries should initiate zone transfer upon receiving NOTIFY
+
+Normally NSD sends NOTIFY messages automatically when:
+- A primary zone serial is updated
+- A zone is reloaded with a new serial
+
+Manual NOTIFY is useful for:
+- Testing secondary configuration
+- Forcing synchronization after network issues
+- Notifying after manual zone file updates
+
+### Receiving NOTIFYs
+
+Secondary zones are configured to accept NOTIFY from primaries:
+
+```yaml
+pattern:
+    name: "secondary-pattern"
+    allow-notify: 192.0.2.53 NOKEY
+    allow-notify: 192.0.2.54 tsig-key-name
+```
+
+When a NOTIFY is received:
+1. NSD checks if the sender is in the `allow-notify` ACL
+2. If authorized, NSD attempts a zone transfer
+3. The transfer uses `request-xfr` configuration
+
+## Zone Status Monitoring
+
+### zonestatus
+
+Print detailed state of zones:
+
+```bash
+nsd-control zonestatus [zone]
+```
+
+Without argument: shows status for all zones  
+With argument: shows status for specified zone only
+
+#### Primary Zone Status
+
+```bash
+nsd-control zonestatus example.com
+```
+
+Output:
+```
+zone:   example.com
+state:  primary
+```
+
+Primary zones show minimal status since they don't perform transfers.
+
+#### Secondary Zone Status
+
+```bash
+nsd-control zonestatus sub.example.com
+```
+
+Output for a healthy secondary:
+```
+zone:   sub.example.com
+pattern: secondary-pattern
+state:  ok
+served-serial: "2024030801 since 2024-03-08 10:15:23"
+commit-serial: "2024030801 since 2024-03-08 10:15:23"
+```
+
+### Zone States
+
+Secondary zones can have the following states:
+
+- **ok** - Zone is up-to-date
+- **refreshing** - Zone has transfer activity in progress
+- **expired** - Zone has expired (could not contact primary within expire time)
+
+### Serial Numbers
+
+Three serial numbers are tracked:
+
+- **served-serial** - Currently active, being served to clients
+- **commit-serial** - In reload, will become active soon
+- **notified-serial** - Got NOTIFY, busy fetching the data
+
+Example output showing all serials:
+```
+zone:   example.com
+state:  refreshing
+served-serial: "2024030801 since 2024-03-08 10:00:00"
+commit-serial: "2024030801 since 2024-03-08 10:00:00"
+notified-serial: "2024030802 since 2024-03-08 10:30:00"
+```
+
+### Transfer Activity
+
+The status shows current transfer activity:
+
+```
+zone:   example.com
+state:  refreshing
+served-serial: "2024030801 since 2024-03-08 10:00:00"
+transfer: "sent UDP to 192.0.2.53"
+```
+
+Or:
+```
+transfer: "TCP connected to 192.0.2.53"
+```
+
+Possible transfer states:
+- `"waiting-for-UDP-fd"` - Waiting for UDP socket
+- `"sent UDP to <ip>"` - Sent SOA query via UDP
+- `"waiting-for-TCP-fd"` - Waiting for TCP socket  
+- `"TCP connected to <ip>"` - TCP transfer in progress
+
+### Notify Activity
+
+For primary zones, the status shows NOTIFY activity:
+
+```
+zone:   example.com
+state:  primary
+notify: "send 192.0.2.1 192.0.2.2 with serial 2024030801"
+```
+
+Or if waiting:
+```
+notify: "waiting-for-fd"
+```
+
+## Writing Zone Files
+
+### write
+
+Write changed zone files to disk:
+
+```bash
+nsd-control write [zone]
+```
+
+Without argument: writes all modified zones  
+With argument: writes specified zone if modified
+
+Examples:
+```bash
+# Write all changed zones
+nsd-control write
+
+# Write specific zone
+nsd-control write example.com
+```
+
+The command:
+1. Writes zones that changed via AXFR or IXFR
+2. Creates zone files that don't exist yet
+3. Creates directory components if necessary
+4. Only writes if zone was modified
+
+Use cases:
+- Persist transferred zones to disk
+- Create zone file backups
+- Prepare for server migration
+
+## Transfer Configuration
+
+### Secondary Zone Pattern
+
+Configure where to request transfers from:
+
+```yaml
+pattern:
+    name: "secondary-pattern"
+    zonefile: "/var/nsd/zones/secondary/%s.zone"
+    # Request AXFR from primary
+    request-xfr: AXFR 192.0.2.53 NOKEY
+    # Or request with TSIG
+    request-xfr: AXFR 192.0.2.53 transfer-key
+    # Accept NOTIFY from primary
+    allow-notify: 192.0.2.53 NOKEY
+    allow-notify: 192.0.2.53 transfer-key
+```
+
+### Primary Zone Pattern
+
+Configure which secondaries to notify and serve:
+
+```yaml
+pattern:
+    name: "primary-pattern"
+    zonefile: "/var/nsd/zones/%s.zone"
+    # Send NOTIFY to secondaries
+    notify: 192.0.2.1 NOKEY
+    notify: 192.0.2.2 transfer-key
+    # Allow zone transfers to secondaries
+    provide-xfr: 192.0.2.1 NOKEY
+    provide-xfr: 192.0.2.2 transfer-key
+```
+
+### TSIG Authentication
+
+Secure transfers with TSIG keys:
+
+```yaml
+key:
+    name: "transfer-key"
+    algorithm: hmac-sha256
+    secret: "base64encodedstring=="
+
+pattern:
+    name: "secondary-pattern"
+    request-xfr: AXFR 192.0.2.53 transfer-key
+    allow-notify: 192.0.2.53 transfer-key
+```
+
+See [TSIG Configuration](/advanced/tsig) for more details.
+
+## Common Workflows
+
+### Initial Secondary Zone Setup
+
+<Steps>
+1. Add the secondary zone:
+   ```bash
+   nsd-control addzone example.com secondary-pattern
+   ```
+
+2. Initial transfer starts automatically. Check status:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+   
+   You'll see:
+   ```
+   state: refreshing
+   transfer: "sent UDP to 192.0.2.53"
+   ```
+
+3. Wait for transfer to complete:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+   
+   Eventually:
+   ```
+   state: ok
+   served-serial: "2024030801 since 2024-03-08 10:30:00"
+   ```
+
+4. Optionally write to disk:
+   ```bash
+   nsd-control write example.com
+   ```
+</Steps>
+
+### Handling Missed NOTIFY
+
+If a secondary missed a NOTIFY:
+
+<Steps>
+1. Check if zone is behind:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+   
+   Compare serial with primary:
+   ```bash
+   dig @primary.example.com example.com SOA
+   ```
+
+2. Manually trigger transfer:
+   ```bash
+   nsd-control transfer example.com
+   ```
+
+3. Verify update:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+</Steps>
+
+### Recovering from Expired Zone
+
+If a zone has expired:
+
+```bash
+nsd-control zonestatus example.com
+```
+Output:
+```
+state: expired
+```
+
+<Steps>
+1. Check primary is reachable:
+   ```bash
+   dig @192.0.2.53 example.com SOA
+   ```
+
+2. Force immediate transfer:
+   ```bash
+   nsd-control transfer example.com
+   ```
+
+3. If still failing, force AXFR:
+   ```bash
+   nsd-control force_transfer example.com
+   ```
+
+4. Check logs for errors:
+   ```bash
+   tail -f /var/log/nsd.log
+   ```
+</Steps>
+
+### Forcing Zone Refresh
+
+To ensure a zone is fully up-to-date:
+
+<Steps>
+1. Force full transfer:
+   ```bash
+   nsd-control force_transfer example.com
+   ```
+
+2. Monitor the transfer:
+   ```bash
+   watch -n 1 'nsd-control zonestatus example.com'
+   ```
+
+3. Write to disk when complete:
+   ```bash
+   nsd-control write example.com
+   ```
+</Steps>
+
+### Testing NOTIFY
+
+To test NOTIFY configuration:
+
+<Steps>
+1. On primary, send NOTIFY:
+   ```bash
+   nsd-control notify example.com
+   ```
+
+2. On secondary, watch for transfer:
+   ```bash
+   tail -f /var/log/nsd.log
+   ```
+
+3. Check zone status:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+</Steps>
+
+## Transfer Tuning
+
+Adjust transfer timing in patterns:
+
+```yaml
+pattern:
+    name: "secondary-pattern"
+    # Retry timing
+    min-retry-time: 3600      # 1 hour
+    max-retry-time: 86400     # 24 hours
+    # Refresh timing
+    min-refresh-time: 3600    # 1 hour
+    max-refresh-time: 86400   # 24 hours
+    # Expiry
+    min-expire-time: 604800   # 7 days
+```
+
+See [Pattern Configuration](/configuration/patterns) for more details.
+
+## IXFR Support
+
+NSD automatically uses IXFR when:
+- Both primary and secondary support IXFR
+- Zone serial has increased
+- IXFR is more efficient than AXFR
+
+To allow AXFR fallback:
+
+```yaml
+pattern:
+    name: "secondary-pattern"
+    allow-axfr-fallback: yes
+```
+
+This allows AXFR if:
+- IXFR is not available
+- IXFR would be larger than AXFR
+- IXFR fails
+
+## Troubleshooting
+
+### Transfer Not Starting
+
+1. Check ACLs in pattern:
+   ```yaml
+   request-xfr: AXFR 192.0.2.53 NOKEY
+   allow-notify: 192.0.2.53 NOKEY
+   ```
+
+2. Verify primary allows transfers:
+   ```bash
+   dig @192.0.2.53 example.com AXFR
+   ```
+
+3. Check firewall rules (TCP port 53)
+
+### Transfer Timing Out
+
+1. Check `tcp-timeout` setting in `nsd.conf`:
+   ```yaml
+   server:
+       tcp-timeout: 120
+   ```
+
+2. Monitor transfer with `zonestatus`:
+   ```bash
+   watch -n 1 'nsd-control zonestatus example.com'
+   ```
+
+3. Try force transfer:
+   ```bash
+   nsd-control force_transfer example.com
+   ```
+
+### TSIG Verification Failed
+
+1. Verify key names match:
+   ```bash
+   nsd-control print_tsig
+   ```
+
+2. Check key is associated with zone:
+   ```bash
+   nsd-control zonestatus example.com
+   ```
+
+3. Verify key on both primary and secondary match
+
+## See Also
+
+- [Zone Management](/operations/zone-management) - Adding and removing zones
+- [Control Utility](/operations/control-utility) - nsd-control commands
+- [Pattern Configuration](/configuration/patterns) - Transfer settings
+- [TSIG Configuration](/advanced/tsig) - Transfer authentication

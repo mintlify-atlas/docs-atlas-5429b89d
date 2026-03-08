@@ -1,0 +1,408 @@
+---
+title: "DNSSEC Configuration"
+description: "Deep technical guide to DNSSEC signing, NSEC3, validation, and configuration in NSD"
+---
+
+# DNSSEC Configuration
+
+NSD provides comprehensive support for DNSSEC (DNS Security Extensions), including NSEC and NSEC3 authenticated denial of existence. This guide covers the technical implementation details and configuration.
+
+## Overview
+
+DNSSEC adds cryptographic signatures to DNS data, enabling resolvers to verify the authenticity and integrity of DNS responses. NSD handles DNSSEC as an authoritative nameserver, serving signed zones with RRSIG, DNSKEY, DS, and NSEC/NSEC3 records.
+
+<Note>
+NSD does not sign zones itself. You must use external signing tools like `ldns-signzone` or BIND's `dnssec-signzone` to create signed zone files. NSD serves the pre-signed data.
+</Note>
+
+## NSEC vs NSEC3
+
+DNSSEC provides authenticated denial of existence through two mechanisms:
+
+### NSEC (Next Secure)
+
+NSEC records form a chain linking all names in a zone, proving that a queried name does not exist.
+
+**Advantages:**
+- Simpler implementation
+- Lower computational overhead
+- No hashing required
+
+**Disadvantages:**
+- Zone enumeration possible (zone walking)
+- All zone names are visible
+
+### NSEC3 (Next Secure 3)
+
+NSEC3 uses cryptographic hashing (SHA-1) to obscure zone contents while still providing authenticated denial of existence.
+
+**Advantages:**
+- Prevents zone enumeration
+- Opt-out support for unsigned delegations
+- Zone contents remain private
+
+**Disadvantages:**
+- Higher computational cost
+- More complex implementation
+- Hash collisions possible (though rare)
+
+## NSEC3 Implementation in NSD
+
+### Hash Calculation
+
+NSD implements NSEC3 hashing using the SHA-1 algorithm with salt and iterations. From the source (`nsec3.c:116`):
+
+```c
+void nsec3_hash_and_store(zone_type* zone, const dname_type* dname, uint8_t* store)
+{
+    const unsigned char* nsec3_salt = NULL;
+    int nsec3_saltlength = 0;
+    int nsec3_iterations = 0;
+
+    detect_nsec3_params(zone->nsec3_param, &nsec3_salt,
+        &nsec3_saltlength, &nsec3_iterations);
+    iterated_hash((unsigned char*)store, nsec3_salt, nsec3_saltlength,
+        dname_name(dname), dname->name_size, nsec3_iterations);
+}
+```
+
+### NSEC3 Parameters
+
+NSEC3 parameters are defined in the NSEC3PARAM record at the zone apex:
+
+- **Hash Algorithm**: Currently only SHA-1 (algorithm 1) is supported
+- **Flags**: Typically 0 (opt-out flag in NSEC3 records, not NSEC3PARAM)
+- **Iterations**: Number of additional hash iterations (0-65535)
+- **Salt**: Hex-encoded salt value (up to 255 octets)
+
+### Precompilation and Trees
+
+NSD precompiles NSEC3 data structures for performance. It maintains four red-black trees:
+
+1. **nsec3tree**: NSEC3 records indexed by base32-encoded hash
+2. **hashtree**: Domain hashes for regular names
+3. **wchashtree**: Wildcard hashes (*.domain)
+4. **dshashtree**: Delegation signer hashes
+
+<Steps>
+
+### Step 1: Zone Trees Creation
+
+When loading a zone, NSD creates the tree structures:
+
+```c
+void nsec3_zone_trees_create(struct region* region, zone_type* zone)
+{
+    if(!zone->nsec3tree)
+        zone->nsec3tree = rbtree_create(region, cmp_nsec3_tree);
+    if(!zone->hashtree)
+        zone->hashtree = rbtree_create(region, cmp_hash_tree);
+    if(!zone->wchashtree)
+        zone->wchashtree = rbtree_create(region, cmp_wchash_tree);
+    if(!zone->dshashtree)
+        zone->dshashtree = rbtree_create(region, cmp_dshash_tree);
+}
+```
+
+### Step 2: Precompile Domains
+
+Each domain is hashed and inserted into appropriate trees:
+
+```c
+void nsec3_precompile_domain(struct namedb* db, struct domain* domain,
+    struct zone* zone, region_type* tmpregion)
+{
+    // Hash the domain and wildcard
+    nsec3_lookup_hash_and_wc(db->region, zone, 
+        domain_dname(domain), domain, tmpregion);
+    
+    // Add to hash trees
+    zone_add_domain_in_hash_tree(db->region, &zone->hashtree,
+        cmp_hash_tree, domain, &domain->nsec3->hash_wc->hash.node);
+    
+    // Find covering NSEC3 record
+    nsec3_find_cover(zone, domain->nsec3->hash_wc->hash.hash,
+        sizeof(domain->nsec3->hash_wc->hash.hash), &result);
+    domain->nsec3->nsec3_cover = result;
+}
+```
+
+### Step 3: Query-Time Proof
+
+When a query results in NXDOMAIN or NODATA, NSD constructs NSEC3 proofs by traversing the precompiled structures.
+
+</Steps>
+
+## Configuration
+
+### Basic DNSSEC Zone
+
+For a zone signed with NSEC:
+
+```conf
+zone:
+    name: example.com
+    zonefile: /zones/example.com.signed
+    # NSD automatically serves DNSSEC records
+    # No special configuration needed
+```
+
+### NSEC3 Zone Configuration
+
+<Tabs>
+  <Tab title="SHA-1 Default">
+    ```conf
+    zone:
+        name: example.com
+        zonefile: /zones/example.com.signed
+        
+    # The zone file must contain:
+    # - NSEC3PARAM record at apex
+    # - NSEC3 records for all names
+    # - RRSIG signatures
+    ```
+  </Tab>
+  
+  <Tab title="With Salt">
+    ```conf
+    # Zone file should include NSEC3PARAM like:
+    # example.com. 3600 IN NSEC3PARAM 1 0 10 AABBCCDD
+    #
+    # Parameters:
+    # - Algorithm: 1 (SHA-1)
+    # - Flags: 0
+    # - Iterations: 10
+    # - Salt: AABBCCDD (hex)
+    
+    zone:
+        name: example.com
+        zonefile: /zones/example.com.signed
+    ```
+  </Tab>
+  
+  <Tab title="Opt-Out">
+    ```conf
+    # For zones with many unsigned delegations
+    # Use opt-out flag (1) in NSEC3 records
+    #
+    # NSEC3PARAM remains: 1 0 10 AABBCCDD
+    # But NSEC3 records have flags=1 for ranges
+    # covering unsigned delegations
+    
+    zone:
+        name: example.com
+        zonefile: /zones/example.com.signed
+    ```
+  </Tab>
+</Tabs>
+
+## NSEC3 Chain Validation
+
+NSD validates NSEC3 chains on startup to ensure consistency:
+
+```c
+static rr_type* check_apex_soa(namedb_type* namedb, zone_type *zone)
+{
+    // Calculate hash of apex
+    nsec3_hash_and_store(zone, dname, h);
+    hashed_apex = nsec3_b32_create(tmpregion, zone, h);
+    
+    // Find the NSEC3 record covering apex
+    domain = domain_table_find(namedb->domains, hashed_apex);
+    nsec3_rrset = domain_find_rrset(domain, zone, TYPE_NSEC3);
+    
+    // Verify NSEC3 has SOA bit set
+    if(nsec3_has_soa(nsec3_rrset->rrs[j])) {
+        return nsec3_rrset->rrs[j];
+    }
+}
+```
+
+<Warning>
+If the NSEC3 chain is broken (missing records, incorrect parameters, or hash collisions), NSD will log errors and may refuse to serve the zone. Always validate your signed zones before deployment.
+</Warning>
+
+## Signing Your Zone
+
+### Using ldns-signzone
+
+<Steps>
+
+### Generate Keys
+
+```bash
+# Generate Zone Signing Key (ZSK)
+ldns-keygen -a ECDSAP256SHA256 -b 256 example.com
+
+# Generate Key Signing Key (KSK)
+ldns-keygen -a ECDSAP256SHA256 -b 256 -k example.com
+```
+
+### Sign with NSEC3
+
+```bash
+# Sign zone with NSEC3
+ldns-signzone -n -s $(openssl rand -hex 16) \
+    -a ECDSAP256SHA256 \
+    -e $(date -d "1 year" +%Y%m%d%H%M%S) \
+    example.com.zone \
+    Kexample.com.+013+12345
+
+# Parameters:
+# -n: Use NSEC3
+# -s <salt>: Hex salt for NSEC3
+# -a: Algorithm
+# -e: Expiration date
+```
+
+### Sign with NSEC3 Opt-Out
+
+```bash
+ldns-signzone -n -p \
+    -s $(openssl rand -hex 16) \
+    -a ECDSAP256SHA256 \
+    example.com.zone \
+    Kexample.com.+013+12345
+
+# -p: Enable opt-out for unsigned delegations
+```
+
+### Reload in NSD
+
+```bash
+# Reload the signed zone
+nsd-control reload example.com
+
+# Check zone status
+nsd-control zonestatus example.com
+```
+
+</Steps>
+
+## Performance Considerations
+
+### Memory Usage
+
+NSEC3 precompilation requires additional memory:
+
+- **Per domain**: ~100-200 bytes for hash storage and tree nodes
+- **Large zones**: A 1M domain zone uses ~100-200MB additional memory for NSEC3
+
+### CPU Impact
+
+NSEC3 hashing occurs at:
+
+1. **Zone load time**: All domains are hashed and precompiled
+2. **Query time**: Only for NXDOMAIN responses when precompilation failed
+
+<Accordion title="Hash Collision Handling">
+  NSD detects hash collisions at query time:
+
+  ```c
+  if(nsec3_find_cover(query->zone, hash, sizeof(hash), &cover))
+  {
+      // Exact match - hash collision
+      VERBOSITY(3, (LOG_ERR, "nsec3 hash collision for name=%s hash=%s",
+          dname_to_string(to_prove, NULL), hashbuf));
+      RCODE_SET(query->packet, RCODE_SERVFAIL);
+      ASSIGN_EDE_CODE_AND_STRING_LITERAL(query->edns.ede,
+          EDE_OTHER, "NSEC3 hash collision");
+      return;
+  }
+  ```
+
+  Hash collisions result in SERVFAIL responses with EDE (Extended DNS Errors) code 0.
+</Accordion>
+
+## Monitoring and Debugging
+
+### Check NSEC3 Status
+
+```bash
+# View zone status including NSEC3 info
+nsd-control zonestatus example.com
+
+# Output includes:
+# zone: example.com
+#   state: ok
+#   served-serial: "2024030800 since 2024-03-08T10:00:00"
+```
+
+### Verify NSEC3 Chain
+
+```bash
+# Check NSEC3PARAM record
+dig @localhost example.com NSEC3PARAM
+
+# Query non-existent name to see NSEC3 proof
+dig @localhost nonexistent.example.com
+
+# Verify DNSSEC signatures
+dig @localhost example.com DNSKEY +dnssec
+```
+
+### Enable Verbose Logging
+
+```conf
+server:
+    verbosity: 2
+```
+
+At verbosity 2, NSD logs:
+- NSEC3 chain validation failures
+- Hash collisions
+- Zone reload status
+
+## Algorithm Support
+
+### Supported Signing Algorithms
+
+NSD supports all standard DNSSEC algorithms when serving signed zones:
+
+- **RSA**: RSASHA1 (5), RSASHA1-NSEC3-SHA1 (7), RSASHA256 (8), RSASHA512 (10)
+- **ECDSA**: ECDSAP256SHA256 (13), ECDSAP384SHA384 (14)
+- **EdDSA**: ED25519 (15), ED448 (16)
+
+### Recommended Algorithms
+
+<Note>
+Modern deployments should use ECDSA or EdDSA algorithms for smaller key sizes and better performance:
+- **ECDSAP256SHA256** (13): Best balance of security and performance
+- **ED25519** (15): Fastest signing/verification, smallest signatures
+</Note>
+
+## Troubleshooting
+
+### NSEC3 Chain Errors
+
+**Symptom**: Zone fails to load with "NSEC3PARAM entry has no hash(apex)"
+
+**Solution**: Ensure the zone file contains a properly signed NSEC3 record covering the apex domain name hash.
+
+### Hash Collision Servfail
+
+**Symptom**: Queries return SERVFAIL with "NSEC3 hash collision" EDE
+
+**Solution**: This is extremely rare. Resign the zone with a different salt value to generate different hashes.
+
+### Broken Chain After Update
+
+**Symptom**: Zone status shows "catalog: consumer (serial: X, # members: 0)"
+
+**Solution**: The NSEC3 chain was broken during zone update. Regenerate and resign the zone completely.
+
+## Security Considerations
+
+<Warning>
+**Salt Rotation**: While NSEC3 salt prevents zone enumeration, periodically rotate the salt (every 6-12 months) to maintain security.
+
+**Iterations**: Keep iterations low (≤10) to prevent CPU exhaustion attacks while maintaining reasonable security.
+
+**Key Rollovers**: Implement automated key rollovers using RFC 5011 or RFC 6781 procedures to maintain security over time.
+</Warning>
+
+## Related Topics
+
+- [TSIG Configuration](/advanced/tsig) - Secure zone transfers
+- [Access Control](/configuration/access-control) - Zone transfer security
+- [Rate Limiting](/advanced/rate-limiting) - Prevent DNSSEC amplification attacks

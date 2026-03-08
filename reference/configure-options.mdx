@@ -1,0 +1,309 @@
+---
+title: Configure Options
+description: Build-time configuration options for NSD
+---
+
+NSD can be configured using GNU autoconf's configure script. In addition to standard configure options, one may use the following:
+
+## Environment Variables
+
+<Accordion title="Compiler & Linker Settings">
+
+```bash configure
+CC=compiler
+```
+Specify the C compiler. The default is gcc or cc. The compiler must support ANSI C89.
+
+```bash configure
+CPPFLAGS=flags
+```
+Specify the C preprocessor flags. Such as `-I<includedir>`.
+
+```bash configure
+CFLAGS=flags
+```
+Specify the C compiler flags. These include code generation, optimisation, warning, and debugging flags. These flags are also passed to the linker. The default for gcc is `-g -O2`.
+
+```bash configure
+LD=linker
+```
+Specify the linker (defaults to the C compiler).
+
+```bash configure
+LDFLAGS=flags
+```
+Specify linker flags.
+
+```bash configure
+LIBS=libs
+```
+Specify additional libraries to link with.
+
+</Accordion>
+
+## Path Configuration Options
+
+<Accordion title="Directory and File Paths">
+
+### `--with-configdir=dir`
+NSD configuration directory, default `/etc/nsd`.
+
+### `--with-nsd_conf_file=path`
+Pathname to the NSD configuration file, default `/etc/nsd/nsd.conf`.
+
+### `--with-pidfile=path`
+Pathname to the NSD pidfile, default is platform specific, mostly `/var/run/nsd.pid`.
+
+### `--with-zonesdir=dir`
+NSD default location for master zone files, default `/etc/nsd/`.
+
+### `--with-logfile=path`
+Pathname to the default log file.
+
+### `--with-dbdir=dir`
+Base directory for the xfrd zone timer state file, the zone list file and the cookie secrets file.
+
+### `--with-xfrdfile=path`
+Pathname to the NSD xfrd zone timer state file.
+
+### `--with-zonelistfile=path`
+Pathname to the NSD zone list file.
+
+### `--with-cookiesecretsfile=path`
+Pathname to the NSD cookie secrets file.
+
+### `--with-xfrdir=path`
+Pathname to where the NSD transfer dir is created.
+
+### `--with-sharedfilesdir=dir`
+NSD shared files directory.
+
+### `--with-chroot=dir`
+NSD default chroot directory.
+
+</Accordion>
+
+## User & Service Options
+
+<Accordion title="Process and Service Configuration">
+
+### `--with-user=username`
+User name or ID to answer the queries with, default is `nsd`.
+
+### `--with-facility=facility`
+Specify the syslog facility to use. The default is LOG_DAEMON. See the syslog(3) manual page for the available facilities.
+
+### `--with-start_priority=number`
+Startup priority for NSD.
+
+### `--with-kill_priority=number`
+Shutdown priority for NSD.
+
+### `--with-tcp-timeout=number`
+Set the default TCP timeout (in seconds). The default is 120 seconds.
+
+</Accordion>
+
+## Library Dependencies
+
+<Accordion title="External Library Configuration">
+
+### `--with-ssl=path`
+Specify the location of the OpenSSL libraries. OpenSSL 0.9.7 or higher is required for TSIG support.
+
+```bash configure
+./configure --with-ssl=/usr/local/ssl
+```
+
+### `--with-libevent=path`
+Specify the location of the `libevent` library (or libev). Useful when the zone count is high.
+
+```bash configure
+./configure --with-libevent=/usr/local
+```
+
+Use `--with-libevent=no` to use a builtin portable implementation (select()).
+
+</Accordion>
+
+## Feature Enable/Disable Options
+
+<Accordion title="IPv6 Support">
+
+### `--disable-ipv6`
+Disables IPv6 support in NSD.
+
+```bash configure
+./configure --disable-ipv6
+```
+
+</Accordion>
+
+<Accordion title="Statistics Options">
+
+### `--disable-bind8-stats`
+Disables BIND8-like statistics.
+
+### `--disable-zone-stats`
+Disable per-zone statistics gathering (if enabled, it needs bind8-stats).
+
+```bash configure
+./configure --disable-zone-stats
+```
+
+</Accordion>
+
+<Accordion title="DNSSEC & NSEC3">
+
+### `--disable-nsec3`
+Disable NSEC3 support. With NSEC3 support enabled, very large zones, also non-NSEC3 zones, use about 20% more memory.
+
+```bash configure
+./configure --disable-nsec3
+```
+
+</Accordion>
+
+<Accordion title="Rate Limiting">
+
+### `--disable-ratelimit`
+Disables rate limiting, based on query name, type and source.
+
+### `--disable-ratelimit-default-is-off`
+Disable this to set default of ratelimit to on (this controls the default, ratelimits can be enabled and disabled in nsd.conf).
+
+```bash configure
+./configure --disable-ratelimit
+```
+
+</Accordion>
+
+<Accordion title="Response Options">
+
+### `--disable-minimal-responses`
+Disable minimal responses. If disabled, responses are more likely to get truncated, resulting in TCP fallback. When enabled (by default) NSD will leave out RRsets to make responses fit inside one datagram, but for shorter responses the full normal response is carried.
+
+```bash configure
+./configure --disable-minimal-responses
+```
+
+</Accordion>
+
+<Accordion title="Development & Debugging">
+
+### `--enable-checking`
+Enable some internal development checks. Useful if you want to modify NSD. This option enables the standard C "assert" macro and compiler warnings.
+
+This will instruct NSD to be stricter when validating its input. This could lead to a reduced service level.
+
+```bash configure
+./configure --enable-checking
+```
+
+### `--enable-memclean`
+Cleanup memory (at exit) for eg. valgrind, memcheck.
+
+### `--enable-log-role`
+Shows the role of processes in the logfile (enable this only for debugging purposes).
+
+</Accordion>
+
+<Accordion title="Advanced Features">
+
+### `--disable-dnstap`
+Disable dnstap support (requires fstrm-devel, protobuf-c).
+
+### `--enable-systemd`
+Compile with systemd support, and then the server notifies libsystemd when the server is up (it needs pkg-config and systemd-devel).
+
+```bash configure
+./configure --enable-systemd
+```
+
+### `--enable-recvmmsg`
+Enable recvmmsg and sendmmsg compilation, faster but some kernel versions may have implementation problems for IPv6.
+
+### `--enable-tcp-fastopen`
+Enable TCP Fast Open.
+
+```bash configure
+./configure --enable-tcp-fastopen
+```
+
+### `--enable-mmap`
+Use mmap instead of malloc. Experimental.
+
+### `--disable-radix-tree`
+You can disable the radix tree and use the red-black tree for the main lookups, the red-black tree uses less memory, but uses some more CPU.
+
+### `--enable-packed`
+Enable packed structure alignment, uses less memory, but unaligned reads.
+
+### `--enable-xdp`
+Enable XDP support.
+
+```bash configure
+./configure --enable-xdp
+```
+
+</Accordion>
+
+<Accordion title="File System Options">
+
+### `--disable-largefile`
+Disable large file support (64 bit file lengths). Makes off_t a 32bit length during compilation.
+
+</Accordion>
+
+<Accordion title="Root Server (Obsolete)">
+
+### `--enable-root-server`
+Configure NSD as a root server (obsolete).
+
+</Accordion>
+
+## SIMD Zone Parser Options
+
+<Accordion title="Parser Kernel Configuration">
+
+### `--disable-westmere`
+Disable Westmere (SSE4.2) parser kernel.
+
+### `--disable-haswell`
+Disable Haswell (AVX2) parser kernel.
+
+</Accordion>
+
+## Example Configuration
+
+```bash configure
+# Standard configuration with OpenSSL and libevent
+./configure \
+  --with-ssl=/usr/local/ssl \
+  --with-libevent=/usr/local \
+  --with-user=nsd \
+  --enable-systemd
+
+# Minimal configuration without advanced features
+./configure \
+  --disable-ipv6 \
+  --disable-nsec3 \
+  --disable-ratelimit \
+  --with-libevent=no
+
+# Development configuration
+./configure \
+  --enable-checking \
+  --enable-memclean \
+  --enable-log-role
+```
+
+## Important Notes
+
+<Warning>
+If you activate `--enable-checking`, NSD will be stricter when validating its input. This could lead to a reduced service level and should only be used for development purposes.
+</Warning>
+
+<Info>
+The `--with-libevent=no` option uses a builtin portable implementation based on select(). This is useful when libevent is not available, but may have reduced performance for high zone counts.
+</Info>

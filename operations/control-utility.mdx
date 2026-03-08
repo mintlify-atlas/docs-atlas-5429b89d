@@ -1,0 +1,403 @@
+---
+title: nsd-control Utility
+description: Remote control utility for managing NSD
+---
+
+The `nsd-control` utility performs remote administration on the NSD server. It reads the configuration file, contacts the NSD server over SSL, sends commands, and displays results.
+
+## Setup
+
+Before using `nsd-control`, you need to set up SSL certificates:
+
+<Steps>
+1. Generate certificates:
+   ```bash
+   nsd-control-setup
+   ```
+   This creates self-signed certificates and private keys for both server and client.
+
+2. Enable control interface in `nsd.conf`:
+   ```yaml
+   remote-control:
+       control-enable: yes
+       control-interface: 127.0.0.1
+       control-port: 8952
+   ```
+
+3. Restart NSD:
+   ```bash
+   nsd-control stop
+   nsd-control start
+   ```
+</Steps>
+
+<Warning>
+The script preserves existing private keys. You can control access by changing permissions on the key files.
+</Warning>
+
+## Command-Line Options
+
+- `-h` - Show version and command-line help
+- `-c cfgfile` - Use specified config file (default: `/etc/nsd/nsd.conf`)
+- `-s server[@port]` - IPv4 or IPv6 address of server to contact (overrides config file)
+
+## Basic Commands
+
+### start
+
+Start the NSD server:
+
+```bash
+nsd-control start
+```
+
+This executes the `nsd` binary. The NSD executable is searched relative to the installation prefix. You can override the location by setting the `NSD_PATH` environment variable.
+
+### stop
+
+Stop the NSD server:
+
+```bash
+nsd-control stop
+```
+
+The server daemon exits gracefully.
+
+### status
+
+Display server status:
+
+```bash
+nsd-control status
+```
+
+Output:
+```
+version: 4.x.x
+verbosity: 2
+```
+
+Exit codes:
+- `0` - Server is running
+- `1` - Error occurred
+- `3` - Server is not running (connection refused)
+
+### reload
+
+Reload zone files and reopen log file:
+
+```bash
+nsd-control reload [zone]
+```
+
+Without argument: reads all changed zone files  
+With argument: reads the zone file for the specified zone
+
+Example:
+```bash
+nsd-control reload example.com
+```
+
+### reconfig
+
+Reload configuration and apply changes:
+
+```bash
+nsd-control reconfig
+```
+
+This reloads `nsd.conf` and applies:
+- TSIG key changes
+- Pattern configuration updates
+- Zone additions/removals mentioned in config
+
+<Warning>
+Some changes require a full restart:
+- Listening IP addresses and ports
+- Chroot settings
+- Per-zone statistics changes
+</Warning>
+
+### repattern
+
+Alias for `reconfig`:
+
+```bash
+nsd-control repattern
+```
+
+## Zone Management Commands
+
+See [Zone Management](/operations/zone-management) for detailed zone commands.
+
+## Zone Transfer Commands
+
+See [Zone Transfers](/operations/zone-transfers) for transfer-related commands.
+
+## Logging Commands
+
+### log_reopen
+
+Reopen the log file (for log rotation):
+
+```bash
+nsd-control log_reopen
+```
+
+Alternatively, send SIGHUP:
+```bash
+kill -HUP $(cat /var/run/nsd.pid)
+```
+
+### verbosity
+
+Change or display logging verbosity:
+
+```bash
+nsd-control verbosity [number]
+```
+
+Without argument: displays current verbosity  
+With argument: sets verbosity to specified level
+
+Examples:
+```bash
+nsd-control verbosity
+# Output: verbosity 2
+
+nsd-control verbosity 3
+# Changes verbosity to 3
+```
+
+## Statistics Commands
+
+### stats
+
+Output statistics information:
+
+```bash
+nsd-control stats
+```
+
+Output format:
+```
+num.queries=12345
+serverX.queries=3456
+time.boot=1234567890.123
+time.elapsed=123.456
+...
+```
+
+<Warning>
+Requires NSD to be compiled with statistics support (`--enable-bind8-stats`).
+</Warning>
+
+### stats_noreset
+
+Same as `stats`, but does not zero the counters:
+
+```bash
+nsd-control stats_noreset
+```
+
+Useful for continuous monitoring without resetting metrics.
+
+### serverpid
+
+Print the PID of the server process:
+
+```bash
+nsd-control serverpid
+```
+
+Output:
+```
+12345
+```
+
+This PID is used for statistics collection. For sending signals, use the PID from `nsd.pid` instead.
+
+## TSIG Key Commands
+
+### print_tsig
+
+Print TSIG key information:
+
+```bash
+nsd-control print_tsig [key_name]
+```
+
+Without argument: lists all TSIG keys  
+With argument: prints the secret and algorithm for the specified key
+
+Example:
+```bash
+nsd-control print_tsig mykey
+# Output:
+# name: mykey
+# secret: base64encodedstring==
+# algorithm: hmac-sha256
+```
+
+### add_tsig
+
+Add a new TSIG key:
+
+```bash
+nsd-control add_tsig <name> <secret> [algo]
+```
+
+Parameters:
+- `name` - Key name
+- `secret` - Base64 encoded secret
+- `algo` - Algorithm (default: `hmac-sha256`)
+
+Example:
+```bash
+nsd-control add_tsig newkey "K2tf3TRrmE..." hmac-sha256
+```
+
+<Warning>
+Changes are only in-memory and are lost on restart. For permanent changes, edit `nsd.conf`.
+</Warning>
+
+### update_tsig
+
+Change an existing TSIG key secret:
+
+```bash
+nsd-control update_tsig <name> <secret>
+```
+
+Example:
+```bash
+nsd-control update_tsig mykey "newbase64secret=="
+```
+
+### del_tsig
+
+Delete a TSIG key:
+
+```bash
+nsd-control del_tsig <key_name>
+```
+
+Returns an error if the key is still in use by any zone.
+
+Example:
+```bash
+nsd-control del_tsig oldkey
+```
+
+### assoc_tsig
+
+Associate a zone with a TSIG key:
+
+```bash
+nsd-control assoc_tsig <zone> <key_name>
+```
+
+This adjusts ACLs for notify, allow-notify, provide-xfr, and request-xfr to use the specified key.
+
+Example:
+```bash
+nsd-control assoc_tsig example.com transfer-key
+```
+
+## Cookie Secret Commands
+
+### add_cookie_secret
+
+Add or replace a cookie secret:
+
+```bash
+nsd-control add_cookie_secret <secret>
+```
+
+The secret must be a 128-bit hex string.
+
+Cookie secrets can be:
+- **Active** - Used to create DNS Cookies
+- **Staging** - Only used for verification
+
+Example:
+```bash
+nsd-control add_cookie_secret "0123456789abcdef0123456789abcdef"
+```
+
+### activate_cookie_secret
+
+Make the staging cookie secret active:
+
+```bash
+nsd-control activate_cookie_secret
+```
+
+The current active secret becomes staging.
+
+### drop_cookie_secret
+
+Drop the staging cookie secret:
+
+```bash
+nsd-control drop_cookie_secret
+```
+
+### print_cookie_secrets
+
+Show current cookie secrets with status:
+
+```bash
+nsd-control print_cookie_secrets
+```
+
+Output:
+```
+active: 0123456789abcdef0123456789abcdef
+staging: fedcba9876543210fedcba9876543210
+```
+
+## Rolling Cookie Secrets (Anycast)
+
+For anycast deployments:
+
+<Steps>
+1. Add new secret as staging on all nodes:
+   ```bash
+   nsd-control add_cookie_secret "<new-secret>"
+   ```
+
+2. Wait for all nodes to have the new secret
+
+3. Activate the new secret on all nodes:
+   ```bash
+   nsd-control activate_cookie_secret
+   ```
+
+4. Wait at least one hour
+
+5. Drop the old (now staging) secret on all nodes:
+   ```bash
+   nsd-control drop_cookie_secret
+   ```
+</Steps>
+
+## Exit Codes
+
+- `0` - Success
+- `1` - Error
+
+## Files
+
+- `/etc/nsd/nsd.conf` - Default configuration file
+- `/etc/nsd/nsd_server.key` - Server private key
+- `/etc/nsd/nsd_server.pem` - Server certificate
+- `/etc/nsd/nsd_control.key` - Control client private key
+- `/etc/nsd/nsd_control.pem` - Control client certificate
+
+## See Also
+
+- [Running NSD](/operations/running-nsd) - Starting and stopping NSD
+- [Zone Management](/operations/zone-management) - Managing zones
+- [Zone Transfers](/operations/zone-transfers) - Transfer operations
+- [Monitoring](/operations/monitoring) - Statistics details
