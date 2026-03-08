@@ -1,0 +1,125 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "NSD",
+  "projectDescription": "An authoritative DNS name server optimized for speed, reliability, and security in high-performance environments.",
+  "theme": "aspen",
+  "primaryColor": "#04645c",
+  "lightColor": "#a3c63f",
+  "darkColor": "#7aadac",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/server-options",
+              "configuration/zone-configuration",
+              "configuration/patterns",
+              "configuration/access-control"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/running-nsd",
+              "operations/control-utility",
+              "operations/zone-management",
+              "operations/zone-transfers",
+              "operations/logging",
+              "operations/monitoring"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/dnssec",
+              "advanced/tsig",
+              "advanced/catalog-zones",
+              "advanced/xdp",
+              "advanced/zone-expiry",
+              "advanced/rate-limiting"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "administration/tuning",
+              "administration/interfaces",
+              "administration/security",
+              "administration/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Manual Pages",
+            "pages": [
+              "reference/nsd",
+              "reference/nsd-conf",
+              "reference/nsd-control",
+              "reference/nsd-checkconf",
+              "reference/nsd-checkzone"
+            ]
+          },
+          {
+            "group": "Zone Files",
+            "pages": [
+              "reference/zonefile-format",
+              "reference/resource-records",
+              "reference/zone-validation"
+            ]
+          },
+          {
+            "group": "Technical Reference",
+            "pages": [
+              "reference/rfc-compliance",
+              "reference/configure-options",
+              "reference/log-messages",
+              "reference/statistics"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "High-performance authoritative DNS server",
+    "DNSSEC support with validation",
+    "Zone transfer via AXFR and IXFR",
+    "TSIG authentication for secure zone transfers",
+    "Catalog zones for automated zone provisioning",
+    "XDP support for extreme performance",
+    "Response rate limiting (RRL)",
+    "Remote control via nsd-control utility",
+    "Multi-process architecture for scalability",
+    "Comprehensive logging and statistics"
+  ],
+  "publicApiSurface": [
+    "nsd - Main name server daemon",
+    "nsd-control - Remote server control utility",
+    "nsd-checkconf - Configuration file validator",
+    "nsd-checkzone - Zone file validator",
+    "nsd-control-setup - SSL certificate setup script",
+    "Configuration: server, zone, pattern, key sections",
+    "Control commands: start, stop, reload, reconfig, status, stats",
+    "Control commands: addzone, delzone, changezone, transfer, notify",
+    "Control commands: zonestatus, write, verbosity",
+    "Zone transfer protocols: AXFR, IXFR",
+    "Security: TSIG keys, DNSSEC signing",
+    "Statistics API via nsd-control stats"
+  ]
+}
